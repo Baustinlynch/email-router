@@ -91,13 +91,15 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
     @app.route("/")
     def index():
         relay = cfg.get("relay", {})
+        imap = cfg.get("imap", {})
         return render_template(
             "index.html",
             whitelist=sorted(cfg.get("whitelist", set())),
             people=sorted(cfg.get("people", {}).items()),
-            relay=relay,
+            relay={key: value for key, value in relay.items() if key != "password"},
             relay_has_password=bool(relay.get("password")),
-            imap=cfg.get("imap", {}),
+            imap={key: value for key, value in imap.items() if key != "password"},
+            imap_has_password=bool(imap.get("password")),
             not_found_recipient=cfg.get("not_found_recipient", ""),
             subject_template=cfg.get("subject_template", ""),
             listen_host=cfg.get("listen_host", "?"),
@@ -191,12 +193,18 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
         relay["ssl"] = bool(form.get("ssl"))
         relay["username"] = form.get("username", "").strip()
         password = form.get("password", "")
-        if password:  # write-only field: blank means "keep the saved one"
+        clear_password = bool(form.get("clear_password"))
+        if clear_password:
+            relay["password"] = ""
+        elif password:  # write-only field: blank means "keep the saved one"
             relay["password"] = password
         relay["from_address"] = from_address
         if save():
-            flash("Relay settings saved." if password
-                  else "Relay settings saved (password unchanged).")
+            if clear_password:
+                flash("Relay settings saved (password removed).")
+            else:
+                flash("Relay settings saved." if password
+                      else "Relay settings saved (password unchanged).")
         return redirect(url_for("index"))
 
     @app.post("/relay/test")
@@ -254,11 +262,21 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
         imap["host"] = host
         imap["port"] = port
         imap["ssl"] = bool(form.get("ssl"))
+        use_relay_credentials = bool(form.get("use_relay_credentials"))
+        if use_relay_credentials:
+            imap["username"] = ""
+            imap["password"] = ""
+        else:
+            imap["username"] = form.get("username", "").strip()
+            password = form.get("password", "")
+            if password:  # write-only field: blank means "keep the saved one"
+                imap["password"] = password
         imap["mailbox"] = form.get("mailbox", "").strip() or "INBOX"
         imap["poll_seconds"] = poll
         imap["mark_seen"] = bool(form.get("mark_seen"))
         if save():
-            flash("IMAP settings saved.")
+            flash("IMAP settings saved (using relay credentials)."
+                  if use_relay_credentials else "IMAP settings saved.")
         return redirect(url_for("index"))
 
     @app.post("/imap/test")

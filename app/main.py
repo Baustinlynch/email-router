@@ -101,24 +101,24 @@ def load_config() -> dict:
 
     file_secrets = _read_secrets()
     legacy_secrets = {}
+    has_legacy_fields = False
     for section, (field, key) in SECRET_FIELDS.items():
         section_cfg = cfg.setdefault(section, {})
-        if file_secrets.get(key):
+        has_legacy_fields = has_legacy_fields or field in section_cfg
+        # A saved blank value is an explicit removal, not an environment fallback.
+        if key in file_secrets:
             value = file_secrets[key]
-        elif os.environ.get(key):
+        elif key in os.environ:
             value = os.environ[key]
         else:
             value = section_cfg.get(field, "")
             if value:
                 legacy_secrets[key] = value
-            elif key in file_secrets:
-                value = file_secrets[key]
-            else:
-                value = os.environ.get(key, "")
         section_cfg[field] = value
 
     if legacy_secrets:
         _write_secrets(legacy_secrets)
+    if has_legacy_fields:
         persisted_cfg = dict(cfg)
         for section, (field, _) in SECRET_FIELDS.items():
             persisted_cfg[section] = dict(cfg[section])

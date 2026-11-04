@@ -78,12 +78,15 @@ User-facing setup and config reference: `README.md`. Runtime data: `config.json`
   `load_config()` lowercases the whitelist and `people` keys but not the `people`
   values (recipient addresses are used as configured).
 - Dashboard: the compose mounts for `config.json` and `.env` are read-write so the
-  dashboard can save settings/secrets — don't re-add `:ro`. The relay password field
-  is write-only (blank keeps the saved value); every POST requires the session CSRF
-  token. A missing dashboard password is generated and saved in `.env` (not logged).
+  dashboard can save settings/secrets — don't re-add `:ro`. Relay and IMAP passwords
+  are write-only (blank keeps the saved value); explicit checkboxes remove the relay
+  password or reset IMAP username/password to the relay credentials. Every POST
+  requires the session CSRF token. A missing dashboard password is generated and saved in `.env` (not logged).
   `save_config()` strips secret fields from JSON and writes `.env` with mode `0600`;
   keep config writes atomic.
 - Passwords live in `.env` as `RELAY_PASSWORD`, `IMAP_PASSWORD`, and
   `DASHBOARD_PASSWORD`; `.env` is ignored by Git and Docker build context. Legacy
-  password fields in `config.json` are migrated to `.env` on startup. Never commit
-  real secrets. Don't "fix" the example whitelist/people addresses.
+  password fields in `config.json` are migrated to `.env` on startup. Saved `.env`
+  entries (including blanks for removal/reset) override environment variables so
+  dashboard changes survive restart. Never commit real secrets. Don't "fix" the
+  example whitelist/people addresses.

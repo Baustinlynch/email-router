@@ -102,7 +102,8 @@
       STARTTLS on (or port <span class="mono">465</span> with SSL on), username =
       <span class="mono">santa@brenden.zip</span>, password = your Zoho password or an
       <b>app-specific password</b> (Zoho account → Security → App Passwords).
-      The saved password is never shown or sent back to the browser.</p>
+      Password changes are saved privately in <span class="mono">.env</span>,
+      never shown or sent back to the browser.</p>
     <form method="post" action="{{ url_for('relay_save') }}" class="stack">
       <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
       <label>SMTP host
@@ -115,11 +116,15 @@
       <label class="check">
         <input type="checkbox" name="ssl" {% if relay.get('ssl') %}checked{% endif %}>
         Use implicit SSL instead (Zoho: port 465; leave STARTTLS off)</label>
-      <label>Username
-        <input type="text" name="username" value="{{ relay.get('username', '') }}"></label>
+      <label>SMTP username / email address
+        <input type="text" name="username" value="{{ relay.get('username', '') }}"
+               autocomplete="username"></label>
       <label>App password
         <input type="password" name="password" autocomplete="new-password"
                placeholder="{{ 'saved — leave blank to keep it' if relay_has_password else 'not set yet' }}"></label>
+      <label class="check">
+        <input type="checkbox" name="clear_password">
+        Remove the saved relay password (overrides the password field above)</label>
       <label>From address on forwarded mail
         <input type="text" name="from_address" value="{{ relay.get('from_address', '') }}" required></label>
       <div class="row"><button type="submit">Save relay settings</button></div>
@@ -137,9 +142,9 @@
     <p class="hint">Poll a real mailbox for new mail and route it exactly like SMTP mail.
       For Zoho Mail: host <span class="mono">imap.zoho.com</span>, port
       <span class="mono">993</span>, SSL on, mailbox <span class="mono">INBOX</span>.
-      Uses the relay username and password above unless
-      <span class="mono">IMAP_PASSWORD</span> is set in <span class="mono">.env</span>.
-      Enable IMAP access in Zoho Mail first
+      Set a separate mailbox account below, or use the relay credentials.
+      Passwords are saved privately in <span class="mono">.env</span> and are never
+      shown or sent back to the browser. Enable IMAP access in Zoho Mail first
       (Settings → Mail Accounts → IMAP).</p>
     <form method="post" action="{{ url_for('imap_save') }}" class="stack">
       <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
@@ -153,6 +158,15 @@
       <label class="check">
         <input type="checkbox" name="ssl" {% if imap.get('ssl', true) %}checked{% endif %}>
         Use SSL (Zoho: yes, port 993)</label>
+      <label>IMAP username / email address
+        <input type="text" name="username" value="{{ imap.get('username', '') }}"
+               autocomplete="username" placeholder="blank = use relay username"></label>
+      <label>IMAP app password
+        <input type="password" name="password" autocomplete="new-password"
+               placeholder="{{ 'saved — leave blank to keep it' if imap_has_password else ('using relay password — enter one to override' if relay_has_password else 'not set yet — enter an IMAP password') }}"></label>
+      <label class="check">
+        <input type="checkbox" name="use_relay_credentials">
+        Clear IMAP username/password overrides and use relay credentials instead</label>
       <label>Mailbox
         <input type="text" name="mailbox" value="{{ imap.get('mailbox', 'INBOX') }}"></label>
       <label>Poll interval (seconds)
@@ -184,7 +198,8 @@
 
   <div class="card">
     <h2>Dashboard access</h2>
-    <p class="hint">Password for logging into this page (minimum 8 characters).</p>
+    <p class="hint">Password for logging into this page (minimum 8 characters).
+      Saved privately in <span class="mono">.env</span>, never displayed here.</p>
     <form method="post" action="{{ url_for('dashboard_password') }}" class="row">
       <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
       <input type="password" name="password" placeholder="new dashboard password"

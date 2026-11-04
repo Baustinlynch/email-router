@@ -15,6 +15,7 @@ import http.cookiejar
 import json
 import os
 import re
+import shlex
 import smtplib
 import socket
 import socketserver
@@ -71,6 +72,7 @@ class FakeIMAPServer(socketserver.ThreadingTCPServer):
         super().__init__(addr, FakeIMAPHandler)
         self.inbox: dict[int, bytes] = {}
         self.seen: set[int] = set()
+        self.logins: list[tuple[str, str]] = []
         self.lock = threading.Lock()
         self._next_uid = 1
 
@@ -99,6 +101,10 @@ class FakeIMAPHandler(socketserver.StreamRequestHandler):
                 self.wfile.write(b"* CAPABILITY IMAP4rev1\r\n")
                 self._ok(tag, "CAPABILITY")
             elif cmd == "LOGIN":
+                username, password = shlex.split(parts[2])
+                server: FakeIMAPServer = self.server  # type: ignore[assignment]
+                with server.lock:
+                    server.logins.append((username, password))
                 self._ok(tag, "LOGIN")
             elif cmd == "SELECT":
                 self.wfile.write(b"* 1 EXISTS\r\n")
@@ -283,6 +289,21 @@ def main() -> int:
                   and secret_keys.get("IMAP_PASSWORD") == '"original-app-password"'
                   and secret_keys.get("DASHBOARD_PASSWORD") == '"test-dashboard-pw"')
             run_checks(catcher, on_disk, on_secrets, imap_server)
+            reloaded = subprocess.run(
+                [sys.executable, "-c",
+                 ("from app.main import CFG; "
+                  "assert CFG['relay']['password'] == ''; "
+                  "assert CFG['imap']['username'] == ''; "
+                  "assert CFG['imap']['password'] == ''; "
+                  "assert CFG['dashboard']['password'] == 'brand-new-dashboard-pw'")],
+                cwd=HERE,
+                env=dict(env, RELAY_PASSWORD="stale-relay-password",
+                         IMAP_PASSWORD="stale-imap-password",
+                         DASHBOARD_PASSWORD="stale-dashboard-password"),
+                capture_output=True, timeout=10, check=False,
+            )
+            check("dashboard credential changes survive reload and override stale environment",
+                  reloaded.returncode == 0, reloaded.stderr.decode(errors="replace"))
     finally:
         stop(proc)
         imap_server.shutdown()
@@ -310,6 +331,10 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
     status, html = c.post("/login", {"password": "test-dashboard-pw"})
     check("login lands on dashboard",
           status == 200 and "alice@example.com" in html, f"status {status}")
+    check("dashboard exposes IMAP account controls",
+          'name="username"' in html and 'name="use_relay_credentials"' in html)
+    check("saved passwords are not included in dashboard HTML",
+          "original-app-password" not in html and "test-dashboard-pw" not in html)
 
     status, html = c.post("/whitelist/add", {"email": "Frank@Example.com"},
                           with_csrf=False)
@@ -445,13 +470,75 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
           and on_secrets().get("RELAY_PASSWORD") == '"original-app-password"')
     check("starttls toggle saved", relay_disk["starttls"] is True)
 
-    c.post("/relay", {"host": "127.0.0.1", "port": str(RELAY_PORT),
-                      "starttls": "on", "username": "bot@example.com",
-                      "password": "brand-new-app-password",
-                      "from_address": "Secret Santa <santa@example.com>"})
+    status, html = c.post("/relay", {
+        "host": "127.0.0.1", "port": str(RELAY_PORT), "starttls": "on",
+        "username": "updated-bot@example.com", "password": "brand-new-app-password",
+        "from_address": "Secret Santa <updated-santa@example.com>"})
+    relay_disk = on_disk()["relay"]
+    check("relay login and From address editable from dashboard",
+          relay_disk["username"] == "updated-bot@example.com"
+          and relay_disk["from_address"] == "Secret Santa <updated-santa@example.com>")
     check("new app password saved outside config.json",
-          "password" not in on_disk()["relay"]
+          "password" not in relay_disk
           and on_secrets().get("RELAY_PASSWORD") == '"brand-new-app-password"')
+    check("updated relay password remains write-only", "brand-new-app-password" not in html)
+
+    imap_fields = {
+        "enabled": "on", "host": "127.0.0.1", "port": str(IMAP_PORT),
+        "username": "inbox@example.com", "password": "separate-imap-password",
+        "mailbox": "INBOX", "poll_seconds": "5", "mark_seen": "on",
+    }
+    status, html = c.post("/imap", imap_fields, with_csrf=False)
+    check("IMAP credential changes require CSRF",
+          status == 400 and on_disk()["imap"]["username"] == "bot@example.com")
+    status, html = c.post("/imap", dict(imap_fields, port="0"))
+    check("invalid IMAP settings leave credentials unchanged",
+          "IMAP port must be" in html
+          and on_disk()["imap"]["username"] == "bot@example.com"
+          and on_secrets().get("IMAP_PASSWORD") == '"original-app-password"')
+
+    login_count = len(imap_server.logins)
+    status, html = c.post("/imap", imap_fields)
+    imap_disk = on_disk()["imap"]
+    check("IMAP account and connection settings saved from dashboard",
+          imap_disk["username"] == "inbox@example.com"
+          and imap_disk["host"] == "127.0.0.1" and imap_disk["port"] == IMAP_PORT
+          and imap_disk["enabled"] and imap_disk["ssl"] is False
+          and imap_disk["poll_seconds"] == 5 and imap_disk["mark_seen"])
+    check("IMAP password saved only in .env",
+          "password" not in imap_disk
+          and on_secrets().get("IMAP_PASSWORD") == '"separate-imap-password"')
+    check("updated IMAP password remains write-only", "separate-imap-password" not in html)
+    check("IMAP poller uses updated account without restart",
+          wait_for(lambda: ("inbox@example.com", "separate-imap-password")
+                   in imap_server.logins[login_count:], timeout=10))
+    status, html = c.post("/imap/test", {})
+    check("IMAP test works with saved separate credentials", "IMAP test OK" in html)
+
+    status, html = c.post("/imap", dict(imap_fields, password=""))
+    check("blank IMAP password preserves saved password",
+          on_secrets().get("IMAP_PASSWORD") == '"separate-imap-password"')
+
+    status, html = c.post("/imap", dict(imap_fields, use_relay_credentials="on"))
+    check("IMAP overrides can be cleared to reuse relay credentials",
+          on_disk()["imap"]["username"] == ""
+          and "password" not in on_disk()["imap"]
+          and on_secrets().get("IMAP_PASSWORD") == '""')
+    login_count = len(imap_server.logins)
+    status, html = c.post("/imap/test", {})
+    check("IMAP test uses relay credentials after reset",
+          "IMAP test OK" in html
+          and ("updated-bot@example.com", "brand-new-app-password")
+          in imap_server.logins[login_count:])
+
+    status, html = c.post("/relay", {
+        "host": "127.0.0.1", "port": str(RELAY_PORT), "starttls": "on",
+        "username": "updated-bot@example.com", "password": "ignored-when-clearing",
+        "clear_password": "on", "from_address": "Secret Santa <updated-santa@example.com>"})
+    check("relay password can be removed without exposing it",
+          "password removed" in html and "password" not in on_disk()["relay"]
+          and on_secrets().get("RELAY_PASSWORD") == '""'
+          and "ignored-when-clearing" not in html)
 
     status, html = c.post("/people/update",
                           {"original": "frank", "name": "Franklin",

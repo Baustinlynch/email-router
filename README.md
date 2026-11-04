@@ -102,12 +102,13 @@ the password and enable IMAP in Zoho:
 2. If the account has two-factor authentication, create an **app-specific
    password** (Zoho account → Security → App Passwords) and use it as the
    password below; otherwise the normal account password works.
-3. Set `RELAY_PASSWORD` in `.env` to the Zoho app password. On the dashboard,
-   set the relay host to `smtp.zoho.com`, port `587`, STARTTLS on (or port `465`
-   with SSL on), and username `santa@brenden.zip`.
-4. The **IMAP** section reads the same username/password by default:
-   host `imap.zoho.com`, port `993`, SSL on, mailbox `INBOX`,
-   `enabled: true`. Use the *Test saved IMAP settings* button to verify.
+3. On the dashboard, enter the Zoho app password in **Relay (SMTP) settings**
+   (saved privately to `.env`). Set the relay host to `smtp.zoho.com`, port `587`,
+   STARTTLS on (or port `465` with SSL on), and username `santa@brenden.zip`.
+4. In **Incoming mail (IMAP)**, enter a separate username/password or select
+   *Clear IMAP username/password overrides and use relay credentials instead*.
+   Use host `imap.zoho.com`, port `993`, SSL on, mailbox `INBOX`, and enable
+   polling. Use the *Test saved IMAP settings* button to verify.
 5. Add the real participants' addresses to `whitelist` and `people`.
 
 Notes:
@@ -129,14 +130,24 @@ The app serves a small admin dashboard (default `0.0.0.0:8080`) where you can:
 - edit the **relay settings**, including the app password (write-only:
   it is never shown or sent back to the browser), with a *test relay* button
   that connects, starts TLS and logs in without sending mail;
-- edit the **IMAP settings** (mailbox polling for incoming mail), with a
-  *test IMAP* button that logs in and opens the mailbox without reading mail;
-- change the fallback recipient and subject template;
+- edit the **IMAP settings**, including its username/email address and separate
+  app password, server, port, SSL, mailbox, polling interval, and read marking,
+  with a *test IMAP* button that logs in and opens the mailbox without reading mail;
+- keep or replace saved SMTP/IMAP passwords, remove a saved SMTP password, or
+  reset IMAP to use the relay credentials;
+- change the dashboard login password, fallback recipient, and subject template;
 - see the last 20 emails the router handled (routed / fallback / rejected).
 
-Non-secret settings are saved to `config.json`; passwords are saved to `.env`.
-Changes apply immediately — no restart needed. Keep `.env` readable only by the account running the app (`chmod 600 .env`),
-back it up privately, and never commit it.
+All mail-account settings and all three passwords can be changed from the
+dashboard; you do not need to edit `.env` after initial setup. Leave a password
+field blank to keep the saved value. A blank IMAP username uses the relay username;
+IMAP uses the relay password when no separate password is saved. To remove both
+IMAP overrides, select the reset-to-relay checkbox before saving.
+
+Non-secret settings are saved to `config.json`; passwords are saved to `.env` and
+are never filled back into forms. Changes apply immediately — no restart needed
+(the IMAP poller picks them up on its next cycle). Keep `.env` readable only by the
+account running the app (`chmod 600 .env`), back it up privately, and never commit it.
 
 **Dashboard password:** if `DASHBOARD_PASSWORD` is empty or missing, the app
 generates one on first start and saves it to `.env` (it is not logged). Read it
@@ -171,6 +182,10 @@ rotated; deleting it from the current file does not remove it from Git history.
 | `.env: RELAY_PASSWORD` | SMTP relay password. |
 | `.env: IMAP_PASSWORD` | Optional IMAP password; blank falls back to `RELAY_PASSWORD`. |
 | `.env: DASHBOARD_PASSWORD` | Dashboard login password; generated and saved in `.env` on first start if blank. |
+
+Saved `.env` entries (including explicit empty values) take precedence over
+same-named environment variables, so dashboard password changes/removals survive
+restarts. When no entry is saved, the environment variable is used as a fallback.
 
 ## Testing locally
 

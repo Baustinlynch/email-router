@@ -214,6 +214,7 @@ def stop(proc: subprocess.Popen) -> None:
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="santa-e2e-")
     cfg_path = os.path.join(tmp, "config.json")
+    secrets_path = os.path.join(tmp, ".env")
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump({
             "listen_host": "127.0.0.1",
@@ -252,7 +253,10 @@ def main() -> int:
     imap_server = FakeIMAPServer(("127.0.0.1", IMAP_PORT))
     threading.Thread(target=imap_server.serve_forever, daemon=True).start()
 
-    env = dict(os.environ, CONFIG_PATH=cfg_path, PYTHONUNBUFFERED="1")
+    env = dict(os.environ, CONFIG_PATH=cfg_path, SECRETS_PATH=secrets_path,
+               PYTHONUNBUFFERED="1")
+    for key in ("RELAY_PASSWORD", "IMAP_PASSWORD", "DASHBOARD_PASSWORD"):
+        env.pop(key, None)
     proc = subprocess.Popen(
         [sys.executable, os.path.join(HERE, "app", "main.py")],
         cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -261,11 +265,24 @@ def main() -> int:
         with open(cfg_path, encoding="utf-8") as f:
             return json.load(f)
 
+    def on_secrets() -> dict:
+        with open(secrets_path, encoding="utf-8") as f:
+            return dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
+
     try:
         ok = wait_for_port(SMTP_PORT) and wait_for_port(DASH_PORT)
         check("app started (SMTP + dashboard up)", ok)
         if ok:
-            run_checks(catcher, on_disk, imap_server)
+            disk = on_disk()
+            secret_keys = on_secrets()
+            check("legacy passwords migrated out of config.json",
+                  all("password" not in section for section in
+                      (disk["relay"], disk["imap"], disk["dashboard"])))
+            check("legacy passwords stored in .env",
+                  secret_keys.get("RELAY_PASSWORD") == '"original-app-password"'
+                  and secret_keys.get("IMAP_PASSWORD") == '"original-app-password"'
+                  and secret_keys.get("DASHBOARD_PASSWORD") == '"test-dashboard-pw"')
+            run_checks(catcher, on_disk, on_secrets, imap_server)
     finally:
         stop(proc)
         imap_server.shutdown()
@@ -278,7 +295,8 @@ def main() -> int:
     return 0
 
 
-def run_checks(catcher: RelayCatcher, on_disk, imap_server: FakeIMAPServer) -> None:
+def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
+               imap_server: FakeIMAPServer) -> None:
     anon = build_opener()
     with anon.open(BASE_URL + "/", timeout=10) as resp:
         check("unauthenticated / redirects to login",
@@ -317,11 +335,17 @@ def run_checks(catcher: RelayCatcher, on_disk, imap_server: FakeIMAPServer) -> N
             "frank@example.com", ["santa@example.com"],
             "From: frank@example.com\r\nTo: santa@example.com\r\n"
             "Subject: Question for Frank\r\n\r\nWhat size shirt do you wear?")
-    wait_for(lambda: len(catcher.messages) >= 1)
+    wait_for(lambda: len(catcher.messages) >= 2)
     check("newly added sender+person routed without restart",
-          len(catcher.messages) == 1, f"captured {len(catcher.messages)}")
-    if catcher.messages:
+          len(catcher.messages) == 2, f"captured {len(catcher.messages)}")
+    if len(catcher.messages) >= 2:
         fwd = catcher.messages[0]
+        ack = catcher.messages[1]
+        check("sender receives a successful routing acknowledgement",
+              ack["To"] == "frank@example.com"
+              and "Frank" in ack.get_content()
+              and "successfully forwarded" in ack.get_content(),
+              ack.as_string())
         check("forwarded to the new person's address",
               fwd["To"] == "frank.santa@example.com", str(fwd["To"]))
         check("From is the anonymous bot address",
@@ -335,17 +359,40 @@ def run_checks(catcher: RelayCatcher, on_disk, imap_server: FakeIMAPServer) -> N
               "frank@example.com" not in fwd.as_string())
 
     # Fallback routing still works.
+    fallback_start = len(catcher.messages)
     with smtplib.SMTP("127.0.0.1", SMTP_PORT, timeout=10) as smtp:
         smtp.sendmail("alice@example.com", ["santa@example.com"],
                       "Subject: hello\r\n\r\nfallback test")
-    wait_for(lambda: len(catcher.messages) >= 2)
-    if len(catcher.messages) >= 2:
+    wait_for(lambda: len(catcher.messages) >= fallback_start + 2)
+    if len(catcher.messages) >= fallback_start + 2:
         check("no-match subject goes to fallback recipient",
-              catcher.messages[1]["To"] == "organizer@example.com",
-              str(catcher.messages[1]["To"]))
+              catcher.messages[fallback_start]["To"] == "organizer@example.com",
+              str(catcher.messages[fallback_start]["To"]))
+        check("fallback acknowledgement identifies the organiser",
+              "organiser (fallback recipient)" in
+              catcher.messages[fallback_start + 1].get_content())
     else:
         check("no-match subject goes to fallback recipient", False,
               "fallback mail never arrived")
+
+    # If no fallback exists, the original sender gets a failure acknowledgement.
+    c.post("/settings", {"not_found_recipient": "", "subject_template": "[SS] {original_subject}"})
+    failure_start = len(catcher.messages)
+    rejected_for_no_name = False
+    try:
+        with smtplib.SMTP("127.0.0.1", SMTP_PORT, timeout=10) as smtp:
+            smtp.sendmail("alice@example.com", ["santa@example.com"],
+                          "Subject: no configured name\r\n\r\nnot routed")
+    except smtplib.SMTPDataError as err:
+        rejected_for_no_name = err.smtp_code == 550
+    wait_for(lambda: len(catcher.messages) > failure_start)
+    check("no-match without fallback is rejected and acknowledged",
+          rejected_for_no_name and len(catcher.messages) > failure_start
+          and catcher.messages[-1]["To"] == "alice@example.com"
+          and "could not be sent" in catcher.messages[-1].get_content(),
+          f"rejected={rejected_for_no_name}; captured={len(catcher.messages) - failure_start}")
+    c.post("/settings", {"not_found_recipient": "organizer@example.com",
+                         "subject_template": "[Secret Santa] {original_subject}"})
 
     # Non-whitelisted sender rejected.
     rejected = False
@@ -371,15 +418,18 @@ def run_checks(catcher: RelayCatcher, on_disk, imap_server: FakeIMAPServer) -> N
     )
     uid = imap_server.add_message(raw)
     before = len(catcher.messages)
-    ok = wait_for(lambda: len(catcher.messages) > before, timeout=15)
-    check("IMAP message routed to the relay", ok,
-          f"captured {len(catcher.messages)}")
+    ok = wait_for(lambda: len(catcher.messages) >= before + 2, timeout=15)
+    check("IMAP message routed and acknowledged through the relay", ok,
+          f"captured {len(catcher.messages) - before}")
     if ok:
-        fwd = catcher.messages[-1]
+        fwd, ack = catcher.messages[before:before + 2]
         check("IMAP forward goes to the matched person",
               fwd["To"] == "grace.santa@example.com", str(fwd["To"]))
         check("IMAP forward is anonymous",
               "grace@example.com" not in fwd.as_string())
+        check("IMAP sender receives an acknowledgement",
+              ack["To"] == "grace@example.com" and "Grace" in ack.get_content(),
+              ack.as_string())
         check("IMAP message marked seen", uid in imap_server.seen)
 
     status, html = c.post("/relay/test", {})
@@ -391,16 +441,17 @@ def run_checks(catcher: RelayCatcher, on_disk, imap_server: FakeIMAPServer) -> N
         "from_address": "Secret Santa <santa@example.com>"})
     relay_disk = on_disk()["relay"]
     check("blank password keeps the saved app password",
-          relay_disk["password"] == "original-app-password",
-          str(relay_disk["password"]))
+          "password" not in relay_disk
+          and on_secrets().get("RELAY_PASSWORD") == '"original-app-password"')
     check("starttls toggle saved", relay_disk["starttls"] is True)
 
     c.post("/relay", {"host": "127.0.0.1", "port": str(RELAY_PORT),
                       "starttls": "on", "username": "bot@example.com",
                       "password": "brand-new-app-password",
                       "from_address": "Secret Santa <santa@example.com>"})
-    check("new app password saved",
-          on_disk()["relay"]["password"] == "brand-new-app-password")
+    check("new app password saved outside config.json",
+          "password" not in on_disk()["relay"]
+          and on_secrets().get("RELAY_PASSWORD") == '"brand-new-app-password"')
 
     status, html = c.post("/people/update",
                           {"original": "frank", "name": "Franklin",
@@ -418,6 +469,9 @@ def run_checks(catcher: RelayCatcher, on_disk, imap_server: FakeIMAPServer) -> N
           and disk["subject_template"] == "[SS] {original_subject}")
 
     c.post("/dashboard/password", {"password": "brand-new-dashboard-pw"})
+    check("new dashboard password saved outside config.json",
+          "password" not in on_disk()["dashboard"]
+          and on_secrets().get("DASHBOARD_PASSWORD") == '"brand-new-dashboard-pw"')
     c2 = Browser()
     status, html = c2.post("/login", {"password": "test-dashboard-pw"})
     check("old dashboard password rejected after change",

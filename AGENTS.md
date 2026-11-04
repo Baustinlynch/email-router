@@ -13,10 +13,11 @@ mail (relay username/from_address or the `X-Original-Sender-Hidden` marker) to
 prevent loops, and takes the sender from `Return-Path` → `X-Envelope-From` → `From`
 (IMAP has no envelope). The live account is Zoho Mail (`santa@brenden.zip`):
 smtp.zoho.com:587 STARTTLS (or 465 with `relay.ssl`) + imap.zoho.com:993 SSL;
-`imap.username`/`imap.password` fall back to the relay credentials when blank.
+`IMAP_PASSWORD` in the ignored `.env` falls back to `RELAY_PASSWORD` when blank.
 A Flask web dashboard (`app/dashboard.py` + `app/templates/`) runs in a daemon
-thread in the same process; it edits the live `CFG` dict in place and persists
-`config.json`, so changes apply without a restart. main.py injects cfg/helpers into
+thread in the same process; it edits the live `CFG` dict in place, persists
+non-secret settings to `config.json` and passwords to `.env`, so changes apply
+without a restart. main.py injects cfg/helpers into
 `dashboard.create_app()` — dashboard.py must NOT `import main` (main.py runs as
 `__main__`; re-importing it would create a second module with its own CFG).
 User-facing setup and config reference: `README.md`. Runtime data: `config.json`.
@@ -29,8 +30,10 @@ User-facing setup and config reference: `README.md`. Runtime data: `config.json`
 - Local deps: `.venv/` (gitignored, host Python 3.14 — the Docker image pins 3.12-slim);
   dependencies are `aiosmtpd` and `flask`.
 - Run locally: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`,
-  then `CONFIG_PATH="$PWD/config.json" .venv/bin/python app/main.py` (CONFIG_PATH
-  must be set before import; the default is the container path `/app/config.json`).
+  copy `.env.example` to `.env`, set mode `600`, then run
+  `CONFIG_PATH="$PWD/config.json" SECRETS_PATH="$PWD/.env" .venv/bin/python app/main.py`
+  (CONFIG_PATH must be set before import; the default is the container path
+  `/app/config.json`).
   Docker: `docker compose up -d --build` (logs: `docker compose logs -f santa-router`).
 - `app/main.py` loads `config.json` at import time via `CONFIG_PATH` (default
   `/app/config.json`, a container path). For any local run or test, set `CONFIG_PATH`
@@ -41,9 +44,10 @@ User-facing setup and config reference: `README.md`. Runtime data: `config.json`
   `smtplib` to the listen port, inspect the captured `EmailMessage`. The same test
   runs a minimal fake IMAP server (`FakeIMAPServer` in e2e_test.py) and verifies the
   poller path end to end.
-- Docker: `docker compose up -d --build` mounts `./config.json` → `/app/config.json`
-  (read-write, so the dashboard can save) and maps ports 1025 (SMTP) and 8080
-  (dashboard). To test the container against a host-side fake relay, run with
+- Docker: create `.env` from `.env.example` before `docker compose up -d --build`;
+  Compose mounts `./config.json` and `./.env` read-write so the dashboard can save
+  settings/secrets, and maps ports 1025 (SMTP) and 8080 (dashboard). To test the
+  container against a host-side fake relay, run with
   `--network host` and localhost ports in the config.
 
 ## Do not break
@@ -73,11 +77,13 @@ User-facing setup and config reference: `README.md`. Runtime data: `config.json`
 - Whitelist matching is case-insensitive on the lowercased envelope `MAIL FROM`;
   `load_config()` lowercases the whitelist and `people` keys but not the `people`
   values (recipient addresses are used as configured).
-- Dashboard: the compose mount for `config.json` is read-write (the dashboard saves
-  changes) — don't re-add `:ro`. The relay password field is write-only (blank keeps
-  the saved value); every POST requires the session CSRF token; the dashboard
-  password is generated + logged on first start when `dashboard.password` is empty.
-  `save_config()` writes a temp file then `os.replace()` — keep it atomic.
-- `config.json` ships with an empty relay/IMAP password on purpose (the real Zoho
-  app password is a secret the user enters via the dashboard) — don't put one in
-  the file, and don't "fix" the example whitelist/people addresses.
+- Dashboard: the compose mounts for `config.json` and `.env` are read-write so the
+  dashboard can save settings/secrets — don't re-add `:ro`. The relay password field
+  is write-only (blank keeps the saved value); every POST requires the session CSRF
+  token. A missing dashboard password is generated and saved in `.env` (not logged).
+  `save_config()` strips secret fields from JSON and writes `.env` with mode `0600`;
+  keep config writes atomic.
+- Passwords live in `.env` as `RELAY_PASSWORD`, `IMAP_PASSWORD`, and
+  `DASHBOARD_PASSWORD`; `.env` is ignored by Git and Docker build context. Legacy
+  password fields in `config.json` are migrated to `.env` on startup. Never commit
+  real secrets. Don't "fix" the example whitelist/people addresses.

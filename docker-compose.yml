@@ -8,6 +8,9 @@ services:
     volumes:
       # Writable so the web dashboard can save changes to it.
       - ./config.json:/app/config.json
+      # Keep credentials out of config.json and the image; create this file first.
+      - ./.env:/app/.env
     environment:
       CONFIG_PATH: /app/config.json
+      SECRETS_PATH: /app/.env
     restart: unless-stopped

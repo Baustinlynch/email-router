@@ -2,8 +2,8 @@
 Web dashboard for the Secret Santa router.
 
 A small Flask app run in a daemon thread inside the SMTP process. It edits the
-live CFG dict in place and persists it to config.json, so routing changes take
-effect immediately — no restart needed.
+live CFG dict in place and persists regular settings to config.json and passwords
+to the ignored .env file, so changes take effect immediately — no restart needed.
 
 main.py injects the config dict and helpers into create_app() instead of this
 module importing them: main.py runs as __main__, so `import main` from here
@@ -83,7 +83,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
             save_config()
             return True
         except OSError as exc:
-            flash(f"Applied for this run, but could not write the config file: {exc}",
+            flash(f"Applied for this run, but could not persist settings: {exc}",
                   "error")
             return False
 
@@ -324,7 +324,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
 
 
 def _ensure_password(cfg: dict, save_config) -> None:
-    """First run: generate a dashboard password, persist it, and log it."""
+    """First run: generate a dashboard password and persist it in .env."""
     dash = cfg.setdefault("dashboard", {})
     if dash.get("password"):
         return
@@ -332,7 +332,6 @@ def _ensure_password(cfg: dict, save_config) -> None:
     dash["password"] = password
     try:
         save_config()
-        log.info("Generated dashboard password (saved to config.json): %s", password)
+        log.info("Generated dashboard password and saved it to .env")
     except OSError:
-        log.warning("Generated dashboard password (could not save to config.json): %s",
-                    password)
+        log.warning("Generated dashboard password but could not save it to .env")

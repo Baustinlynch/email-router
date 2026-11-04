@@ -137,8 +137,9 @@
     <p class="hint">Poll a real mailbox for new mail and route it exactly like SMTP mail.
       For Zoho Mail: host <span class="mono">imap.zoho.com</span>, port
       <span class="mono">993</span>, SSL on, mailbox <span class="mono">INBOX</span>.
-      Uses the relay username and password above unless overridden in
-      <span class="mono">config.json</span>. Enable IMAP access in Zoho Mail first
+      Uses the relay username and password above unless
+      <span class="mono">IMAP_PASSWORD</span> is set in <span class="mono">.env</span>.
+      Enable IMAP access in Zoho Mail first
       (Settings → Mail Accounts → IMAP).</p>
     <form method="post" action="{{ url_for('imap_save') }}" class="stack">
       <input type="hidden" name="csrf" value="{{ session['csrf'] }}">

@@ -8,7 +8,6 @@
     "starttls": true,
     "ssl": false,
     "username": "santa@brenden.zip",
-    "password": "",
     "from_address": "Secret Santa <santa@brenden.zip>"
   },
 
@@ -18,7 +17,6 @@
     "port": 993,
     "ssl": true,
     "username": "santa@brenden.zip",
-    "password": "",
     "mailbox": "INBOX",
     "poll_seconds": 30,
     "mark_seen": true
@@ -26,8 +24,7 @@
 
   "dashboard": {
     "host": "0.0.0.0",
-    "port": 8080,
-    "password": ""
+    "port": 8080
   },
 
   "whitelist": [

@@ -40,11 +40,91 @@ log = logging.getLogger("santa-router")
 # Configuration
 # --------------------------------------------------------------------------
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/app/config.json")
+SECRETS_PATH = os.environ.get(
+    "SECRETS_PATH", os.path.join(os.path.dirname(CONFIG_PATH), ".env"))
+SECRET_FIELDS = {
+    "relay": ("password", "RELAY_PASSWORD"),
+    "imap": ("password", "IMAP_PASSWORD"),
+    "dashboard": ("password", "DASHBOARD_PASSWORD"),
+}
+
+
+def _read_secrets() -> dict[str, str]:
+    values = {}
+    try:
+        with open(SECRETS_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return values
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if value.startswith('"'):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                value = value.strip('"')
+        elif value.startswith("'") and value.endswith("'"):
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def _write_secrets(values: dict[str, str]) -> None:
+    existing = _read_secrets()
+    existing.update(values)
+    directory = os.path.dirname(SECRETS_PATH) or "."
+    os.makedirs(directory, exist_ok=True)
+    with open(SECRETS_PATH, "w", encoding="utf-8") as f:
+        os.chmod(SECRETS_PATH, 0o600)
+        f.writelines(
+            f"{key}={json.dumps(existing[key], ensure_ascii=False)}\n"
+            for key in sorted(existing)
+        )
+
+
+def _write_config(data: dict) -> None:
+    tmp = f"{CONFIG_PATH}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.replace(tmp, CONFIG_PATH)
 
 
 def load_config() -> dict:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
+
+    file_secrets = _read_secrets()
+    legacy_secrets = {}
+    for section, (field, key) in SECRET_FIELDS.items():
+        section_cfg = cfg.setdefault(section, {})
+        if file_secrets.get(key):
+            value = file_secrets[key]
+        elif os.environ.get(key):
+            value = os.environ[key]
+        else:
+            value = section_cfg.get(field, "")
+            if value:
+                legacy_secrets[key] = value
+            elif key in file_secrets:
+                value = file_secrets[key]
+            else:
+                value = os.environ.get(key, "")
+        section_cfg[field] = value
+
+    if legacy_secrets:
+        _write_secrets(legacy_secrets)
+        persisted_cfg = dict(cfg)
+        for section, (field, _) in SECRET_FIELDS.items():
+            persisted_cfg[section] = dict(cfg[section])
+            persisted_cfg[section].pop(field, None)
+        _write_config(persisted_cfg)
+
     # Normalise whitelist emails to lowercase for case-insensitive matching
     cfg["whitelist"] = {addr.strip().lower() for addr in cfg.get("whitelist", [])}
     cfg["people"] = {
@@ -55,14 +135,17 @@ def load_config() -> dict:
 
 
 def save_config() -> None:
-    """Atomically write the live config back to disk (whitelist stored as a list)."""
+    """Persist non-secret config and credentials separately in the ignored .env."""
+    secret_values = {}
     data = dict(CFG)
+    for section, (field, key) in SECRET_FIELDS.items():
+        section_data = dict(CFG.get(section, {}))
+        secret_values[key] = section_data.pop(field, "") or ""
+        data[section] = section_data
+    _write_secrets(secret_values)
+
     data["whitelist"] = sorted(CFG["whitelist"])
-    tmp = f"{CONFIG_PATH}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    os.replace(tmp, CONFIG_PATH)
+    _write_config(data)
 
 
 CFG = load_config()
@@ -189,6 +272,31 @@ def send_via_relay(msg: EmailMessage) -> None:
             smtp.send_message(msg)
 
 
+def send_acknowledgement(sender: str, success: bool, person: str | None = None,
+                         reason: str | None = None) -> None:
+    """Tell a whitelisted sender whether their message was forwarded."""
+    sender = parseaddr(sender)[1].strip().lower()
+    if not sender:
+        return
+
+    msg = EmailMessage()
+    msg["From"] = CFG["relay"]["from_address"]
+    msg["To"] = sender
+    msg["Auto-Submitted"] = "auto-replied"
+    if success:
+        target = person or "the organiser (fallback recipient)"
+        msg["Subject"] = "Your Secret Santa email was sent"
+        msg.set_content(f"Your email was successfully forwarded to {target}.")
+    else:
+        msg["Subject"] = "Your Secret Santa email was not sent"
+        msg.set_content(f"Your email could not be sent. {reason or 'Please try again later.'}")
+
+    try:
+        send_via_relay(msg)
+    except Exception:
+        log.exception("Could not send routing acknowledgement to %s", sender)
+
+
 # --------------------------------------------------------------------------
 # Routing (shared by the SMTP listener and the IMAP poller)
 # --------------------------------------------------------------------------
@@ -211,22 +319,33 @@ def route_message(original: EmailMessage, sender: str) -> str:
             log.warning("No name matched subject %r and no fallback set", subject)
             record_event("rejected",
                          f"no name in subject {subject!r} (from {sender})")
+            send_acknowledgement(
+                sender, False,
+                reason=("no configured person's name was found in the subject, "
+                        "and no fallback recipient is configured."),
+            )
             return "550 5.1.1 No valid recipient name in subject"
         log.info("No match for subject %r, forwarding to fallback %s",
                  subject, fallback)
         recipient = fallback
         matched_name = None
 
+    assert recipient is not None
     log.info("Matched %r -> forwarding to %s", matched_name or "(fallback)", recipient)
-    record_event("routed", f"{sender} → {matched_name or 'fallback'} ({recipient})")
     try:
         fwd = build_forward(original, recipient, matched_name)
         send_via_relay(fwd)
     except Exception:
         log.exception("Relay send failed for mail from %s", sender)
         record_event("error", f"relay send failed for mail from {sender}")
+        target = matched_name.title() if matched_name else "the organiser (fallback recipient)"
+        send_acknowledgement(
+            sender, False, reason=f"the router could not forward it to {target}. Please try again later.",
+        )
         return "451 4.3.0 Relay error, try again later"
 
+    record_event("routed", f"{sender} → {matched_name or 'fallback'} ({recipient})")
+    send_acknowledgement(sender, True, matched_name.title() if matched_name else None)
     return "250 Message accepted and routed"
 
 

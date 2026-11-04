@@ -14,6 +14,9 @@ to people in a Secret Santa gift exchange.
    and forwards it to Bob's secret Santa email (`bob.santa@example.com`).
 4. Non-whitelisted senders are rejected. Subjects that match no name are
    forwarded to a fallback (e.g. the organiser) or rejected.
+5. Whitelisted senders receive an email confirming who their message was
+   forwarded to, or explaining when the router could not forward it. A failed
+   delivery acknowledgement depends on the SMTP relay being available.
 
 The app can receive mail two ways — use **one** of them, not both:
 
@@ -27,9 +30,14 @@ Outbound mail always goes through the configured SMTP relay.
 
 ## Quick start
 
-1. Edit `config.json`:
-   - Put your real SMTP relay details under `relay` (for Zoho/Gmail use an app
-     password — see the Zoho section below).
+1. Create a private `.env` file and edit `config.json`:
+   ```bash
+   cp .env.example .env
+   chmod 600 .env
+   ```
+   Put SMTP, IMAP, and dashboard passwords in `.env` (see the Zoho section
+   below). Keep `.env` private; it is ignored by Git and excluded from the image.
+   `config.json` contains only non-secret settings.
    - Add every allowed sender to `whitelist`.
    - Map each **name to be typed in the subject** to that person's **email**
      under `people`.
@@ -60,8 +68,9 @@ docker compose logs -f santa-router
 docker compose down
 ```
 
-`docker-compose.yml` mounts `./config.json` into the container and publishes
-ports **1025** (SMTP) and **8080** (dashboard).
+`docker-compose.yml` mounts `./config.json` and the private `./.env` into the
+container and publishes ports **1025** (SMTP) and **8080** (dashboard). Create
+`.env` from `.env.example` before starting Docker Compose.
 
 ### Locally, without Docker
 
@@ -70,17 +79,19 @@ Requires Python 3.12+ (the Docker image uses `python:3.12-slim`).
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+cp .env.example .env
+chmod 600 .env
 
 # CONFIG_PATH must be set before the app starts; the default is /app/config.json
-CONFIG_PATH="$PWD/config.json" .venv/bin/python app/main.py
+CONFIG_PATH="$PWD/config.json" SECRETS_PATH="$PWD/.env" .venv/bin/python app/main.py
 ```
 
 The app then listens on `0.0.0.0:1025` (SMTP) and serves the dashboard at
 `http://localhost:8080`. Press Ctrl+C to stop. On Windows use
 `.venv\Scripts\python` instead of `.venv/bin/python`.
 
-If `dashboard.password` is empty, the generated password is printed in the log
-on first start.
+If `DASHBOARD_PASSWORD` is blank or missing, the app generates a dashboard
+password on first start and stores it in `.env`. Read it from that private file.
 
 ## Using Zoho Mail (santa@brenden.zip)
 
@@ -91,9 +102,9 @@ the password and enable IMAP in Zoho:
 2. If the account has two-factor authentication, create an **app-specific
    password** (Zoho account → Security → App Passwords) and use it as the
    password below; otherwise the normal account password works.
-3. On the dashboard (or in `config.json`), set the **relay** password:
-   host `smtp.zoho.com`, port `587`, STARTTLS on (or port `465` with SSL on),
-   username `santa@brenden.zip`.
+3. Set `RELAY_PASSWORD` in `.env` to the Zoho app password. On the dashboard,
+   set the relay host to `smtp.zoho.com`, port `587`, STARTTLS on (or port `465`
+   with SSL on), and username `santa@brenden.zip`.
 4. The **IMAP** section reads the same username/password by default:
    host `imap.zoho.com`, port `993`, SSL on, mailbox `INBOX`,
    `enabled: true`. Use the *Test saved IMAP settings* button to verify.
@@ -123,18 +134,21 @@ The app serves a small admin dashboard (default `0.0.0.0:8080`) where you can:
 - change the fallback recipient and subject template;
 - see the last 20 emails the router handled (routed / fallback / rejected).
 
-Changes are saved straight to `config.json` and apply immediately — no restart
-needed.
+Non-secret settings are saved to `config.json`; passwords are saved to `.env`.
+Changes apply immediately — no restart needed. Keep `.env` readable only by the account running the app (`chmod 600 .env`),
+back it up privately, and never commit it.
 
-**Dashboard password:** if `dashboard.password` is empty on first start, the
-app generates one, saves it to `config.json` and logs it — read it with
-`docker compose logs santa-router | grep dashboard`. Change it on the
-dashboard's *Dashboard access* card. Sessions end when the app restarts.
+**Dashboard password:** if `DASHBOARD_PASSWORD` is empty or missing, the app
+generates one on first start and saves it to `.env` (it is not logged). Read it
+from that private file. Change it on the dashboard's *Dashboard access* card.
+Sessions end when the app restarts.
 
 **Security notes:** the dashboard is protected by that single password, a
 session cookie and CSRF tokens, but it is plain HTTP — keep the port private
-(firewall/VPN) or put it behind a TLS reverse proxy. `config.json` is mounted
-read-write in `docker-compose.yml` so the dashboard can save changes.
+(firewall/VPN) or put it behind a TLS reverse proxy. Both `config.json` and
+`.env` are mounted read-write in `docker-compose.yml` so the dashboard can save
+settings. Any password that was previously committed to a public repo should be
+rotated; deleting it from the current file does not remove it from Git history.
 
 ## Config reference
 
@@ -145,7 +159,7 @@ read-write in `docker-compose.yml` so the dashboard can save changes.
 | `relay.from_address` | The `From:` shown on forwarded mail (the anonymous identity). |
 | `imap.enabled` | Poll a mailbox for incoming mail instead of (or in addition to) the SMTP listener. |
 | `imap.host` / `imap.port` / `imap.ssl` | IMAP server to poll (Zoho: `imap.zoho.com`, `993`, SSL). |
-| `imap.username` / `imap.password` | IMAP login; blank falls back to the relay credentials. |
+| `imap.username` | IMAP login name; the password is `IMAP_PASSWORD` in `.env`, falling back to the relay password when blank. |
 | `imap.mailbox` | Mailbox to poll (default `INBOX`). |
 | `imap.poll_seconds` | Seconds between polls (minimum 5 via the dashboard). |
 | `imap.mark_seen` | Mark handled mail as read so it is not processed twice. |
@@ -154,7 +168,9 @@ read-write in `docker-compose.yml` so the dashboard can save changes.
 | `not_found_recipient` | Fallback address when no name matches the subject. |
 | `subject_template` | Subject line of forwarded mail; `{original_subject}` is substituted. |
 | `dashboard.host` / `dashboard.port` | Where the web dashboard listens (default `0.0.0.0:8080`). |
-| `dashboard.password` | Dashboard login password; generated and logged on first start if empty. |
+| `.env: RELAY_PASSWORD` | SMTP relay password. |
+| `.env: IMAP_PASSWORD` | Optional IMAP password; blank falls back to `RELAY_PASSWORD`. |
+| `.env: DASHBOARD_PASSWORD` | Dashboard login password; generated and saved in `.env` on first start if blank. |
 
 ## Testing locally
 

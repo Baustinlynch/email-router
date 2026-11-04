@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="wrap narrow">
+  <form method="post" action="{{ url_for('login') }}" class="card login">
+    <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+    <h1>🎅 Secret Santa Router</h1>
+    <p class="hint">Enter the dashboard password. On first start one is generated and
+      logged — check the app logs, or set <span class="mono">dashboard.password</span>
+      in config.json.</p>
+    {% for cat, msg in get_flashed_messages(with_categories=true) %}
+      <div class="flash {{ 'error' if cat == 'error' else 'ok' }}">{{ msg }}</div>
+    {% endfor %}
+    <label>Password
+      <input type="password" name="password" autofocus required></label>
+    <button type="submit">Log in</button>
+  </form>
+</div>
+{% endblock %}

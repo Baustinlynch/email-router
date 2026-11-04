@@ -1,0 +1,2 @@
+aiosmtpd>=1.4.4
+flask>=3.0

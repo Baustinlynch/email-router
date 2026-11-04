@@ -1,0 +1,13 @@
+services:
+  santa-router:
+    build: .
+    container_name: santa-router
+    ports:
+      - "1025:1025"
+      - "8080:8080"
+    volumes:
+      # Writable so the web dashboard can save changes to it.
+      - ./config.json:/app/config.json
+    environment:
+      CONFIG_PATH: /app/config.json
+    restart: unless-stopped

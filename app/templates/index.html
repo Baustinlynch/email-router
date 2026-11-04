@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="wrap">
+  <header class="bar">
+    <h1>🎅 Secret Santa Router</h1>
+    <form method="post" action="{{ url_for('logout') }}">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <button class="ghost" type="submit">Log out</button>
+    </form>
+  </header>
+
+  {% for cat, msg in get_flashed_messages(with_categories=true) %}
+    <div class="flash {{ 'error' if cat == 'error' else 'ok' }}">{{ msg }}</div>
+  {% endfor %}
+
+  <div class="card">
+    <h2>Status</h2>
+    <p class="hint" style="margin-bottom:0">
+      SMTP on <span class="mono">{{ listen_host }}:{{ listen_port }}</span> ·
+      relay <span class="mono">{{ relay.get('host', '?') }}:{{ relay.get('port', '?') }}</span> ·
+      {{ whitelist|length }} whitelisted senders · {{ people|length }} people
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Recent activity</h2>
+    <p class="hint">The last 20 emails handled since the app started.</p>
+    {% if events %}
+      <table>
+        <tr><th>Time</th><th>Event</th></tr>
+        {% for e in events %}
+          <tr>
+            <td class="mono" style="white-space:nowrap">{{ e.time }}</td>
+            <td>{{ e.detail }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="hint" style="margin-bottom:0">No mail handled yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>People</h2>
+    <p class="hint">Senders put one of these names in the subject line; the mail is
+      forwarded anonymously to the matching address. Matching is case-insensitive and
+      ignores extra whitespace; the longest name wins.</p>
+    <form method="post" action="{{ url_for('people_add') }}" class="row" style="margin-bottom:16px">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <input type="text" name="name" placeholder="Name in the subject, e.g. Bob" required>
+      <input type="text" name="email" placeholder="their.address@example.com" required>
+      <button type="submit">Add person</button>
+    </form>
+    <div class="grid">
+      <div class="head">Name in subject</div>
+      <div class="head">Forwards to</div>
+      <div></div>
+    </div>
+    {% for name, email in people %}
+      <form method="post" action="{{ url_for('people_update') }}" class="grid">
+        <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+        <input type="hidden" name="original" value="{{ name }}">
+        <input type="text" name="name" value="{{ name }}">
+        <input type="text" name="email" value="{{ email }}">
+        <div class="row">
+          <button type="submit">Save</button>
+          <button type="submit" class="danger" formaction="{{ url_for('people_remove') }}">Remove</button>
+        </div>
+      </form>
+    {% endfor %}
+    {% if not people %}<p class="hint" style="margin-bottom:0">No people configured yet.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Whitelisted senders</h2>
+    <p class="hint">Only these envelope sender addresses may use the bot (case-insensitive).</p>
+    <form method="post" action="{{ url_for('whitelist_add') }}" class="row" style="margin-bottom:16px">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <input type="text" name="email" placeholder="sender@example.com" required>
+      <button type="submit">Add sender</button>
+    </form>
+    <div class="grid one">
+      <div class="head">Address</div>
+      <div></div>
+    </div>
+    {% for addr in whitelist %}
+      <form method="post" action="{{ url_for('whitelist_remove') }}" class="grid one">
+        <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+        <input type="hidden" name="email" value="{{ addr }}">
+        <div class="mono" style="align-self:center">{{ addr }}</div>
+        <div><button type="submit" class="danger">Remove</button></div>
+      </form>
+    {% endfor %}
+    {% if not whitelist %}<p class="hint" style="margin-bottom:0">Nobody whitelisted yet.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Relay (Gmail) settings</h2>
+    <p class="hint">The real SMTP account that delivers forwarded mail. For Gmail:
+      host <span class="mono">smtp.gmail.com</span>, port <span class="mono">587</span>,
+      STARTTLS on, username = the Gmail address, password = a 16-character
+      <b>App Password</b> (Google account → Security → 2-Step Verification → App passwords).
+      The saved password is never shown or sent back to the browser.</p>
+    <form method="post" action="{{ url_for('relay_save') }}" class="stack">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <label>SMTP host
+        <input type="text" name="host" value="{{ relay.get('host', '') }}" required></label>
+      <label>Port
+        <input type="number" name="port" value="{{ relay.get('port', 587) }}" style="max-width:140px" required></label>
+      <label class="check">
+        <input type="checkbox" name="starttls" {% if relay.get('starttls', true) %}checked{% endif %}>
+        Use STARTTLS and log in (Gmail: yes)</label>
+      <label>Username
+        <input type="text" name="username" value="{{ relay.get('username', '') }}"></label>
+      <label>App password
+        <input type="password" name="password" autocomplete="new-password"
+               placeholder="{{ 'saved — leave blank to keep it' if relay_has_password else 'not set yet' }}"></label>
+      <label>From address on forwarded mail
+        <input type="text" name="from_address" value="{{ relay.get('from_address', '') }}" required></label>
+      <div class="row"><button type="submit">Save relay settings</button></div>
+    </form>
+    <form method="post" action="{{ url_for('relay_test') }}" class="row" style="margin-top:12px">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <button class="ghost" type="submit">Test saved relay settings</button>
+    </form>
+    <p class="hint" style="margin:8px 0 0">Tests the <b>saved</b> settings, so save first:
+      connects, starts TLS and logs in — no mail is sent.</p>
+  </div>
+
+  <div class="card">
+    <h2>General</h2>
+    <form method="post" action="{{ url_for('settings_save') }}" class="stack">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <label>Fallback recipient for mail whose subject matches no name (blank = reject it)
+        <input type="text" name="not_found_recipient" value="{{ not_found_recipient }}"></label>
+      <label>Subject template for forwarded mail
+        <input type="text" name="subject_template" value="{{ subject_template }}"></label>
+      <div class="row"><button type="submit">Save general settings</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Dashboard access</h2>
+    <p class="hint">Password for logging into this page (minimum 8 characters).</p>
+    <form method="post" action="{{ url_for('dashboard_password') }}" class="row">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <input type="password" name="password" placeholder="new dashboard password"
+             required minlength="8" autocomplete="new-password">
+      <button type="submit">Update password</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

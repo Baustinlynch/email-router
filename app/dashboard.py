@@ -10,6 +10,7 @@ module importing them: main.py runs as __main__, so `import main` from here
 would re-execute the file as a second module with its own copy of CFG.
 """
 
+import imaplib
 import logging
 import re
 import secrets
@@ -96,6 +97,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
             people=sorted(cfg.get("people", {}).items()),
             relay=relay,
             relay_has_password=bool(relay.get("password")),
+            imap=cfg.get("imap", {}),
             not_found_recipient=cfg.get("not_found_recipient", ""),
             subject_template=cfg.get("subject_template", ""),
             listen_host=cfg.get("listen_host", "?"),
@@ -186,6 +188,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
         relay["host"] = host
         relay["port"] = port
         relay["starttls"] = bool(form.get("starttls"))
+        relay["ssl"] = bool(form.get("ssl"))
         relay["username"] = form.get("username", "").strip()
         password = form.get("password", "")
         if password:  # write-only field: blank means "keep the saved one"
@@ -202,20 +205,91 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
         try:
             host = relay["host"]
             port = int(relay.get("port", 587))
-            with smtplib.SMTP(host, port, timeout=15) as smtp:
-                smtp.ehlo()
-                if relay.get("starttls", True):
-                    smtp.starttls()
+            if relay.get("ssl"):
+                with smtplib.SMTP_SSL(host, port, timeout=15) as smtp:
                     smtp.ehlo()
                     smtp.login(relay.get("username", ""), relay.get("password", ""))
-                    note = "connected, TLS up, logged in"
-                else:
-                    note = "connected (STARTTLS off, no login attempted)"
+                    note = "connected over SSL, logged in"
+            else:
+                with smtplib.SMTP(host, port, timeout=15) as smtp:
+                    smtp.ehlo()
+                    if relay.get("starttls", True):
+                        smtp.starttls()
+                        smtp.ehlo()
+                        smtp.login(relay.get("username", ""), relay.get("password", ""))
+                        note = "connected, TLS up, logged in"
+                    else:
+                        note = "connected (STARTTLS off, no login attempted)"
             flash(f"Relay test OK — {note} ({host}:{port}).")
         except KeyError:
             flash("No relay host configured.", "error")
         except Exception as exc:
             flash(f"Relay test failed: {exc}", "error")
+        return redirect(url_for("index"))
+
+    # ------------------------------------------------------------------ imap
+    @app.post("/imap")
+    def imap_save():
+        form = request.form
+        try:
+            port = int(form.get("port", ""))
+            if not 1 <= port <= 65535:
+                raise ValueError
+        except ValueError:
+            flash("IMAP port must be a number between 1 and 65535.", "error")
+            return redirect(url_for("index"))
+        try:
+            poll = int(form.get("poll_seconds", "30"))
+            if poll < 5:
+                raise ValueError
+        except ValueError:
+            flash("IMAP poll interval must be at least 5 seconds.", "error")
+            return redirect(url_for("index"))
+        host = form.get("host", "").strip()
+        if not host:
+            flash("IMAP host is required.", "error")
+            return redirect(url_for("index"))
+        imap = cfg.setdefault("imap", {})
+        imap["enabled"] = bool(form.get("enabled"))
+        imap["host"] = host
+        imap["port"] = port
+        imap["ssl"] = bool(form.get("ssl"))
+        imap["mailbox"] = form.get("mailbox", "").strip() or "INBOX"
+        imap["poll_seconds"] = poll
+        imap["mark_seen"] = bool(form.get("mark_seen"))
+        if save():
+            flash("IMAP settings saved.")
+        return redirect(url_for("index"))
+
+    @app.post("/imap/test")
+    def imap_test():
+        imap = cfg.get("imap", {})
+        relay = cfg.get("relay", {})
+        username = imap.get("username") or relay.get("username", "")
+        password = imap.get("password") or relay.get("password", "")
+        try:
+            host = imap["host"]
+            port = int(imap.get("port", 993))
+            mailbox = imap.get("mailbox", "INBOX")
+            if imap.get("ssl", True):
+                conn = imaplib.IMAP4_SSL(host, port, timeout=15)
+            else:
+                conn = imaplib.IMAP4(host, port, timeout=15)
+            try:
+                conn.login(username, password)
+                typ, _ = conn.select(mailbox, readonly=True)
+                if typ != "OK":
+                    raise RuntimeError(f"SELECT {mailbox} failed")
+            finally:
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+            flash(f"IMAP test OK — logged in and opened {mailbox} ({host}:{port}).")
+        except KeyError:
+            flash("No IMAP host configured.", "error")
+        except Exception as exc:
+            flash(f"IMAP test failed: {exc}", "error")
         return redirect(url_for("index"))
 
     # ------------------------------------------------------- general settings

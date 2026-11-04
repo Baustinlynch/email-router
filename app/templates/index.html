@@ -18,6 +18,7 @@
     <p class="hint" style="margin-bottom:0">
       SMTP on <span class="mono">{{ listen_host }}:{{ listen_port }}</span> ·
       relay <span class="mono">{{ relay.get('host', '?') }}:{{ relay.get('port', '?') }}</span> ·
+      IMAP {% if imap.get('enabled') %}<span class="mono">{{ imap.get('host', '?') }}:{{ imap.get('port', '?') }}</span>{% else %}off{% endif %} ·
       {{ whitelist|length }} whitelisted senders · {{ people|length }} people
     </p>
   </div>
@@ -95,11 +96,12 @@
   </div>
 
   <div class="card">
-    <h2>Relay (Gmail) settings</h2>
-    <p class="hint">The real SMTP account that delivers forwarded mail. For Gmail:
-      host <span class="mono">smtp.gmail.com</span>, port <span class="mono">587</span>,
-      STARTTLS on, username = the Gmail address, password = a 16-character
-      <b>App Password</b> (Google account → Security → 2-Step Verification → App passwords).
+    <h2>Relay (SMTP) settings</h2>
+    <p class="hint">The real SMTP account that delivers forwarded mail. For Zoho Mail:
+      host <span class="mono">smtp.zoho.com</span>, port <span class="mono">587</span>,
+      STARTTLS on (or port <span class="mono">465</span> with SSL on), username =
+      <span class="mono">santa@brenden.zip</span>, password = your Zoho password or an
+      <b>app-specific password</b> (Zoho account → Security → App Passwords).
       The saved password is never shown or sent back to the browser.</p>
     <form method="post" action="{{ url_for('relay_save') }}" class="stack">
       <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
@@ -109,7 +111,10 @@
         <input type="number" name="port" value="{{ relay.get('port', 587) }}" style="max-width:140px" required></label>
       <label class="check">
         <input type="checkbox" name="starttls" {% if relay.get('starttls', true) %}checked{% endif %}>
-        Use STARTTLS and log in (Gmail: yes)</label>
+        Use STARTTLS and log in (Zoho: yes, port 587)</label>
+      <label class="check">
+        <input type="checkbox" name="ssl" {% if relay.get('ssl') %}checked{% endif %}>
+        Use implicit SSL instead (Zoho: port 465; leave STARTTLS off)</label>
       <label>Username
         <input type="text" name="username" value="{{ relay.get('username', '') }}"></label>
       <label>App password
@@ -125,6 +130,43 @@
     </form>
     <p class="hint" style="margin:8px 0 0">Tests the <b>saved</b> settings, so save first:
       connects, starts TLS and logs in — no mail is sent.</p>
+  </div>
+
+  <div class="card">
+    <h2>Incoming mail (IMAP)</h2>
+    <p class="hint">Poll a real mailbox for new mail and route it exactly like SMTP mail.
+      For Zoho Mail: host <span class="mono">imap.zoho.com</span>, port
+      <span class="mono">993</span>, SSL on, mailbox <span class="mono">INBOX</span>.
+      Uses the relay username and password above unless overridden in
+      <span class="mono">config.json</span>. Enable IMAP access in Zoho Mail first
+      (Settings → Mail Accounts → IMAP).</p>
+    <form method="post" action="{{ url_for('imap_save') }}" class="stack">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <label class="check">
+        <input type="checkbox" name="enabled" {% if imap.get('enabled') %}checked{% endif %}>
+        Poll this mailbox for incoming mail</label>
+      <label>IMAP host
+        <input type="text" name="host" value="{{ imap.get('host', 'imap.zoho.com') }}" required></label>
+      <label>Port
+        <input type="number" name="port" value="{{ imap.get('port', 993) }}" style="max-width:140px" required></label>
+      <label class="check">
+        <input type="checkbox" name="ssl" {% if imap.get('ssl', true) %}checked{% endif %}>
+        Use SSL (Zoho: yes, port 993)</label>
+      <label>Mailbox
+        <input type="text" name="mailbox" value="{{ imap.get('mailbox', 'INBOX') }}"></label>
+      <label>Poll interval (seconds)
+        <input type="number" name="poll_seconds" value="{{ imap.get('poll_seconds', 30) }}" min="5" style="max-width:140px"></label>
+      <label class="check">
+        <input type="checkbox" name="mark_seen" {% if imap.get('mark_seen', true) %}checked{% endif %}>
+        Mark handled mail as read (prevents re-processing)</label>
+      <div class="row"><button type="submit">Save IMAP settings</button></div>
+    </form>
+    <form method="post" action="{{ url_for('imap_test') }}" class="row" style="margin-top:12px">
+      <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
+      <button class="ghost" type="submit">Test saved IMAP settings</button>
+    </form>
+    <p class="hint" style="margin:8px 0 0">Tests the <b>saved</b> settings, so save first:
+      connects, logs in and opens the mailbox — no mail is read or changed.</p>
   </div>
 
   <div class="card">

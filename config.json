@@ -3,12 +3,25 @@
   "listen_port": 1025,
 
   "relay": {
-    "host": "smtp.gmail.com",
+    "host": "smtp.zoho.com",
     "port": 587,
     "starttls": true,
-    "username": "your-bot-address@gmail.com",
-    "password": "app-password-here",
-    "from_address": "Secret Santa <secretsanta@yourdomain.com>"
+    "ssl": false,
+    "username": "santa@brenden.zip",
+    "password": "",
+    "from_address": "Secret Santa <santa@brenden.zip>"
+  },
+
+  "imap": {
+    "enabled": true,
+    "host": "imap.zoho.com",
+    "port": 993,
+    "ssl": true,
+    "username": "santa@brenden.zip",
+    "password": "",
+    "mailbox": "INBOX",
+    "poll_seconds": 30,
+    "mark_seen": true
   },
 
   "dashboard": {

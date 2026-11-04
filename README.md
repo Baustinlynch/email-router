@@ -15,10 +15,21 @@ to people in a Secret Santa gift exchange.
 4. Non-whitelisted senders are rejected. Subjects that match no name are
    forwarded to a fallback (e.g. the organiser) or rejected.
 
+The app can receive mail two ways — use **one** of them, not both:
+
+- **IMAP polling** (default): the app logs into a real mailbox (e.g. Zoho Mail)
+  every `poll_seconds`, fetches unread mail and routes it. No MX changes needed.
+- **SMTP listener**: something delivers mail to the app's port **1025**
+  (MX record or a forwarding service). Keep `imap.enabled` off if you use this,
+  or the same message may be routed twice.
+
+Outbound mail always goes through the configured SMTP relay.
+
 ## Quick start
 
 1. Edit `config.json`:
-   - Put your real SMTP relay details under `relay` (for Gmail use an App Password).
+   - Put your real SMTP relay details under `relay` (for Zoho/Gmail use an app
+     password — see the Zoho section below).
    - Add every allowed sender to `whitelist`.
    - Map each **name to be typed in the subject** to that person's **email**
      under `people`.
@@ -29,10 +40,74 @@ to people in a Secret Santa gift exchange.
    docker compose up -d --build
    ```
 
-3. Point your MX (or an alias/forward rule) for the bot address at the host on
-   port **1025**, or use an email-forwarding service that delivers via SMTP.
+3. Get mail **in**: either enable IMAP polling (below) or point your MX (or an
+   alias/forward rule) for the bot address at the host on port **1025**.
 4. Open the web dashboard on port **8080** to manage everything from a browser
    (see below).
+
+## Running the app
+
+### Docker (recommended)
+
+```bash
+# build and start in the background
+docker compose up -d --build
+
+# follow the logs (the generated dashboard password is logged here)
+docker compose logs -f santa-router
+
+# stop it
+docker compose down
+```
+
+`docker-compose.yml` mounts `./config.json` into the container and publishes
+ports **1025** (SMTP) and **8080** (dashboard).
+
+### Locally, without Docker
+
+Requires Python 3.12+ (the Docker image uses `python:3.12-slim`).
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# CONFIG_PATH must be set before the app starts; the default is /app/config.json
+CONFIG_PATH="$PWD/config.json" .venv/bin/python app/main.py
+```
+
+The app then listens on `0.0.0.0:1025` (SMTP) and serves the dashboard at
+`http://localhost:8080`. Press Ctrl+C to stop. On Windows use
+`.venv\Scripts\python` instead of `.venv/bin/python`.
+
+If `dashboard.password` is empty, the generated password is printed in the log
+on first start.
+
+## Using Zoho Mail (santa@brenden.zip)
+
+The shipped `config.json` is already pointed at Zoho; you only need to supply
+the password and enable IMAP in Zoho:
+
+1. In Zoho Mail: **Settings → Mail Accounts → IMAP → Enable IMAP access**.
+2. If the account has two-factor authentication, create an **app-specific
+   password** (Zoho account → Security → App Passwords) and use it as the
+   password below; otherwise the normal account password works.
+3. On the dashboard (or in `config.json`), set the **relay** password:
+   host `smtp.zoho.com`, port `587`, STARTTLS on (or port `465` with SSL on),
+   username `santa@brenden.zip`.
+4. The **IMAP** section reads the same username/password by default:
+   host `imap.zoho.com`, port `993`, SSL on, mailbox `INBOX`,
+   `enabled: true`. Use the *Test saved IMAP settings* button to verify.
+5. Add the real participants' addresses to `whitelist` and `people`.
+
+Notes:
+
+- Zoho's free plan includes IMAP/POP/SMTP access; if the IMAP test fails with
+  an auth error, re-check step 1 and 2.
+- With IMAP polling you do **not** point MX at this host — Zoho receives the
+  mail and the app fetches it. Leave the SMTP listener free for local tests.
+- The poller skips messages the app sent itself (its own From address or the
+  `X-Original-Sender-Hidden` marker), so forwarded mail cannot loop back.
+- Handled messages are marked read (`mark_seen`) so they are not re-processed.
 
 ## Web dashboard
 
@@ -40,9 +115,11 @@ The app serves a small admin dashboard (default `0.0.0.0:8080`) where you can:
 
 - add/remove **whitelisted sender** addresses;
 - add/edit/remove **people** — the name put in the subject → their email;
-- edit the **relay settings**, including the Gmail app password (write-only:
+- edit the **relay settings**, including the app password (write-only:
   it is never shown or sent back to the browser), with a *test relay* button
   that connects, starts TLS and logs in without sending mail;
+- edit the **IMAP settings** (mailbox polling for incoming mail), with a
+  *test IMAP* button that logs in and opens the mailbox without reading mail;
 - change the fallback recipient and subject template;
 - see the last 20 emails the router handled (routed / fallback / rejected).
 
@@ -66,6 +143,12 @@ read-write in `docker-compose.yml` so the dashboard can save changes.
 | `listen_host` / `listen_port` | Where the app accepts incoming SMTP. |
 | `relay` | Real SMTP server used to deliver the forwarded mail. |
 | `relay.from_address` | The `From:` shown on forwarded mail (the anonymous identity). |
+| `imap.enabled` | Poll a mailbox for incoming mail instead of (or in addition to) the SMTP listener. |
+| `imap.host` / `imap.port` / `imap.ssl` | IMAP server to poll (Zoho: `imap.zoho.com`, `993`, SSL). |
+| `imap.username` / `imap.password` | IMAP login; blank falls back to the relay credentials. |
+| `imap.mailbox` | Mailbox to poll (default `INBOX`). |
+| `imap.poll_seconds` | Seconds between polls (minimum 5 via the dashboard). |
+| `imap.mark_seen` | Mark handled mail as read so it is not processed twice. |
 | `whitelist` | Only these sender addresses may use the bot. |
 | `people` | `{name: email}` — the name goes in the subject, mail goes to `email`. |
 | `not_found_recipient` | Fallback address when no name matches the subject. |
@@ -75,9 +158,9 @@ read-write in `docker-compose.yml` so the dashboard can save changes.
 
 ## Testing locally
 
-There is an automated end-to-end check that boots a fake relay, starts the real
-app (SMTP + dashboard) against a temp config, exercises the dashboard over HTTP
-and sends mail through the SMTP path:
+There is an automated end-to-end check that boots a fake relay and a fake IMAP
+server, starts the real app (SMTP + dashboard) against a temp config, exercises
+the dashboard over HTTP, and sends mail through both the SMTP and IMAP paths:
 
 ```bash
 .venv/bin/python e2e_test.py
@@ -98,6 +181,8 @@ EOF
 
 ## Notes
 
+- IMAP-fetched mail has no SMTP envelope, so the sender is taken from
+  `Return-Path` (falling back to `From`) — the same whitelist applies.
 - Matching is **case-insensitive** and **whitespace-insensitive**.
 - The longest name wins, so `Ann` won't wrongly match `Anna`.
 - The matched name is removed from the forwarded subject; the rest of the

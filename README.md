@@ -38,8 +38,8 @@ Outbound mail always goes through the configured SMTP relay.
    Put SMTP, IMAP, and dashboard passwords in `.env` (see the Zoho section
    below). Keep `.env` private; it is ignored by Git and excluded from the image.
    `config.json` contains only non-secret settings.
-   - Add every allowed sender to `whitelist`.
-   - Map each **name to be typed in the subject** to that person's **email**
+   - Add any additional allowed senders to `whitelist`.
+   - Map each **name to be typed in the subject** to that person's **email** under `people`. People are automatically whitelisted to send as well.
      under `people`.
    - Set `not_found_recipient` to the organiser's email (optional safety net).
 2. Start it:
@@ -61,7 +61,7 @@ Outbound mail always goes through the configured SMTP relay.
 # build and start in the background
 docker compose up -d --build
 
-# follow the logs (the generated dashboard password is logged here)
+# follow the logs (read the generated dashboard password from the private .env file)
 docker compose logs -f santa-router
 
 # stop it
@@ -70,7 +70,15 @@ docker compose down
 
 `docker-compose.yml` mounts `./config.json` and the private `./.env` into the
 container and publishes ports **1025** (SMTP) and **8080** (dashboard). Create
-`.env` from `.env.example` before starting Docker Compose.
+`.env` from `.env.example` before starting Docker Compose. Compose refuses to
+start if this file is missing rather than creating a directory in its place.
+
+If an older setup keeps restarting with `IsADirectoryError: '/app/.env'`, Docker
+may have created an empty `.env` directory. Stop the container, remove that
+**empty** directory with `rmdir .env` (use `sudo` if required), then run
+`cp .env.example .env` and `chmod 600 .env`. Recreate the container with
+`docker compose up -d --force-recreate`. Do not delete an existing `.env` file:
+it contains your private credentials.
 
 ### Locally, without Docker
 
@@ -109,7 +117,7 @@ the password and enable IMAP in Zoho:
    *Clear IMAP username/password overrides and use relay credentials instead*.
    Use host `imap.zoho.com`, port `993`, SSL on, mailbox `INBOX`, and enable
    polling. Use the *Test saved IMAP settings* button to verify.
-5. Add the real participants' addresses to `whitelist` and `people`.
+5. Add the real participants' addresses to `people` — they are automatically whitelisted to send as well. Add any additional senders to `whitelist`.
 
 Notes:
 
@@ -174,7 +182,7 @@ rotated; deleting it from the current file does not remove it from Git history.
 | `imap.mailbox` | Mailbox to poll (default `INBOX`). |
 | `imap.poll_seconds` | Seconds between polls (minimum 5 via the dashboard). |
 | `imap.mark_seen` | Mark handled mail as read so it is not processed twice. |
-| `whitelist` | Only these sender addresses may use the bot. |
+| `whitelist` | Only these sender addresses may use the bot. Every person's email address (from `people`) is also automatically allowed to send. |
 | `people` | `{name: email}` — the name goes in the subject, mail goes to `email`. |
 | `not_found_recipient` | Fallback address when no name matches the subject. |
 | `subject_template` | Subject line of forwarded mail; `{original_subject}` is substituted. |

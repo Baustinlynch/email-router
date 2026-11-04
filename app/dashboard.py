@@ -95,6 +95,9 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
         return render_template(
             "index.html",
             whitelist=sorted(cfg.get("whitelist", set())),
+            effective_whitelist=sorted(set(cfg.get("whitelist", set()))
+                                      | {e.strip().lower()
+                                         for e in cfg.get("people", {}).values()}),
             people=sorted(cfg.get("people", {}).items()),
             relay={key: value for key, value in relay.items() if key != "password"},
             relay_has_password=bool(relay.get("password")),

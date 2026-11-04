@@ -273,7 +273,7 @@ def send_via_relay(msg: EmailMessage) -> None:
 
 
 def send_acknowledgement(sender: str, success: bool, person: str | None = None,
-                         reason: str | None = None) -> None:
+                         reason: str | None = None, *, include_names: bool = False) -> None:
     """Tell a whitelisted sender whether their message was forwarded."""
     sender = parseaddr(sender)[1].strip().lower()
     if not sender:
@@ -286,10 +286,20 @@ def send_acknowledgement(sender: str, success: bool, person: str | None = None,
     if success:
         target = person or "the organiser (fallback recipient)"
         msg["Subject"] = "Your Secret Santa email was sent"
-        msg.set_content(f"Your email was successfully forwarded to {target}.")
+        body = f"Your email was successfully forwarded to {target}."
     else:
         msg["Subject"] = "Your Secret Santa email was not sent"
-        msg.set_content(f"Your email could not be sent. {reason or 'Please try again later.'}")
+        body = f"Your email could not be sent. {reason or 'Please try again later.'}"
+
+    if include_names:
+        names = sorted(CFG.get("people", {}))
+        if names:
+            body += ("\n\nNo configured person's name was found in your subject. "
+                     "Please use one of these names in the subject and send again:\n\n"
+                     + "\n".join(f"- {name.title()}" for name in names))
+        else:
+            body += "\n\nNo recipient names are configured yet. Please contact the organiser."
+    msg.set_content(body)
 
     try:
         send_via_relay(msg)
@@ -300,12 +310,20 @@ def send_acknowledgement(sender: str, success: bool, person: str | None = None,
 # --------------------------------------------------------------------------
 # Routing (shared by the SMTP listener and the IMAP poller)
 # --------------------------------------------------------------------------
+def _effective_whitelist() -> set:
+    """Compute the effective whitelist: explicit whitelist entries plus all people's emails (lowercased, stripped)."""
+    explicit = set(CFG["whitelist"])
+    for name, email in CFG["people"].items():
+        explicit.add(email.strip().lower())
+    return explicit
+
+
 def route_message(original: EmailMessage, sender: str) -> str:
     """Route one parsed message. Returns an SMTP-style status string."""
     sender = (sender or "").strip().lower()
     log.info("Received mail from %s", sender)
 
-    if sender not in CFG["whitelist"]:
+    if sender not in _effective_whitelist():
         log.warning("Rejected non-whitelisted sender %s", sender)
         record_event("rejected", f"{sender} is not whitelisted")
         return "550 5.7.1 Sender not whitelisted"
@@ -323,6 +341,7 @@ def route_message(original: EmailMessage, sender: str) -> str:
                 sender, False,
                 reason=("no configured person's name was found in the subject, "
                         "and no fallback recipient is configured."),
+                include_names=True,
             )
             return "550 5.1.1 No valid recipient name in subject"
         log.info("No match for subject %r, forwarding to fallback %s",
@@ -341,11 +360,13 @@ def route_message(original: EmailMessage, sender: str) -> str:
         target = matched_name.title() if matched_name else "the organiser (fallback recipient)"
         send_acknowledgement(
             sender, False, reason=f"the router could not forward it to {target}. Please try again later.",
+            include_names=not matched_name,
         )
         return "451 4.3.0 Relay error, try again later"
 
     record_event("routed", f"{sender} → {matched_name or 'fallback'} ({recipient})")
-    send_acknowledgement(sender, True, matched_name.title() if matched_name else None)
+    send_acknowledgement(sender, True, matched_name.title() if matched_name else None,
+                         include_names=not matched_name)
     return "250 Message accepted and routed"
 
 
@@ -465,7 +486,7 @@ class SantaHandler:
         sender = (envelope.mail_from or "").strip().lower()
 
         # Check the whitelist before parsing untrusted content.
-        if sender not in CFG["whitelist"]:
+        if sender not in _effective_whitelist():
             log.warning("Rejected non-whitelisted sender %s", sender)
             record_event("rejected", f"{sender} is not whitelisted")
             return "550 5.7.1 Sender not whitelisted"
@@ -508,7 +529,7 @@ def main():
     controller = Controller(SantaHandler(), hostname=host, port=port)
     controller.start()
     log.info("Secret Santa router listening on %s:%s", host, port)
-    log.info("Whitelisted senders: %s", ", ".join(sorted(CFG["whitelist"])))
+    log.info("Whitelisted senders: %s", ", ".join(sorted(_effective_whitelist())))
     log.info("Routable people: %s", ", ".join(sorted(CFG["people"])))
     _start_dashboard()
 

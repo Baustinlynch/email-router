@@ -19,7 +19,7 @@
       SMTP on <span class="mono">{{ listen_host }}:{{ listen_port }}</span> ·
       relay <span class="mono">{{ relay.get('host', '?') }}:{{ relay.get('port', '?') }}</span> ·
       IMAP {% if imap.get('enabled') %}<span class="mono">{{ imap.get('host', '?') }}:{{ imap.get('port', '?') }}</span>{% else %}off{% endif %} ·
-      {{ whitelist|length }} whitelisted senders · {{ people|length }} people
+      {{ effective_whitelist|length }} whitelisted senders · {{ people|length }} people
     </p>
   </div>
 
@@ -74,7 +74,8 @@
 
   <div class="card">
     <h2>Whitelisted senders</h2>
-    <p class="hint">Only these envelope sender addresses may use the bot (case-insensitive).</p>
+    <p class="hint">Only these envelope sender addresses may use the bot (case-insensitive).
+       Every person's email address is also automatically allowed to send.</p>
     <form method="post" action="{{ url_for('whitelist_add') }}" class="row" style="margin-bottom:16px">
       <input type="hidden" name="csrf" value="{{ session['csrf'] }}">
       <input type="text" name="email" placeholder="sender@example.com" required>

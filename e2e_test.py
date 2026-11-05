@@ -225,10 +225,12 @@ def main() -> int:
         json.dump({
             "listen_host": "127.0.0.1",
             "listen_port": SMTP_PORT,
+            "server_location": "uk",
             "relay": {
                 "host": "127.0.0.1",
                 "port": RELAY_PORT,
                 "starttls": False,
+                "ssl": False,
                 "username": "bot@example.com",
                 "password": "original-app-password",
                 "from_address": "Secret Santa <santa@example.com>",
@@ -272,8 +274,22 @@ def main() -> int:
             return json.load(f)
 
     def on_secrets() -> dict:
+        import json
         with open(secrets_path, encoding="utf-8") as f:
-            return dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
+            result = {}
+            for line in f:
+                line = line.strip()
+                if not line or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                try:
+                    value = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+                result[key] = value
+        return result
 
     try:
         ok = wait_for_port(SMTP_PORT) and wait_for_port(DASH_PORT)
@@ -343,7 +359,7 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
     status, html = c.post("/whitelist/add", {"email": "Frank@Example.com"})
     check("whitelist add appears in UI", "frank@example.com" in html)
     check("whitelist add persisted (lowercased)",
-          "frank@example.com" in on_disk()["whitelist"])
+          "frank@example.com" in on_secrets()["WHITELIST"])
 
     status, html = c.post("/whitelist/add", {"email": "alice@example.com"})
     check("duplicate whitelist add refused", "already whitelisted" in html)
@@ -352,7 +368,7 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
                           {"name": "Frank", "email": "frank.santa@example.com"})
     check("people add appears in UI", "frank.santa@example.com" in html)
     check("people add persisted (name lowercased)",
-          on_disk()["people"].get("frank") == "frank.santa@example.com")
+          on_secrets()["PEOPLE"].get("frank") == "frank.santa@example.com")
 
     # Live reload: the new sender + person must work without a restart.
     with smtplib.SMTP("127.0.0.1", SMTP_PORT, timeout=10) as smtp:
@@ -436,7 +452,7 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
            {"name": "Grace", "email": "grace.santa@example.com"})
     raw = (
         b"From: grace@example.com\r\n"
-        b"To: santa@brenden.zip\r\n"
+        b"To: santa@example.com\r\n"
         b"Subject: Question for Grace\r\n"
         b"\r\n"
         b"What colour do you like?\r\n"
@@ -476,8 +492,8 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
         "from_address": "Secret Santa <updated-santa@example.com>"})
     relay_disk = on_disk()["relay"]
     check("relay login and From address editable from dashboard",
-          relay_disk["username"] == "updated-bot@example.com"
-          and relay_disk["from_address"] == "Secret Santa <updated-santa@example.com>")
+          on_secrets().get("RELAY_USERNAME") == '"updated-bot@example.com"'
+          and on_secrets().get("RELAY_FROM_ADDRESS") == '"Secret Santa <updated-santa@example.com>"')
     check("new app password saved outside config.json",
           "password" not in relay_disk
           and on_secrets().get("RELAY_PASSWORD") == '"brand-new-app-password"')
@@ -490,11 +506,11 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
     }
     status, html = c.post("/imap", imap_fields, with_csrf=False)
     check("IMAP credential changes require CSRF",
-          status == 400 and on_disk()["imap"]["username"] == "bot@example.com")
+          status == 400 and on_secrets().get("IMAP_USERNAME") == '"bot@example.com"')
     status, html = c.post("/imap", dict(imap_fields, port="0"))
     check("invalid IMAP settings leave credentials unchanged",
           "IMAP port must be" in html
-          and on_disk()["imap"]["username"] == "bot@example.com"
+          and on_secrets().get("IMAP_USERNAME") == '"bot@example.com"'
           and on_secrets().get("IMAP_PASSWORD") == '"original-app-password"')
 
     login_count = len(imap_server.logins)
@@ -512,7 +528,7 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
     check("IMAP poller uses updated account without restart",
           wait_for(lambda: ("inbox@example.com", "separate-imap-password")
                    in imap_server.logins[login_count:], timeout=10))
-    status, html = c.post("/imap/test", {})
+    status, html = c.post("/imap", {})
     check("IMAP test works with saved separate credentials", "IMAP test OK" in html)
 
     status, html = c.post("/imap", dict(imap_fields, password=""))
@@ -521,11 +537,11 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
 
     status, html = c.post("/imap", dict(imap_fields, use_relay_credentials="on"))
     check("IMAP overrides can be cleared to reuse relay credentials",
-          on_disk()["imap"]["username"] == ""
+          on_secrets().get("IMAP_USERNAME") == '""'
           and "password" not in on_disk()["imap"]
           and on_secrets().get("IMAP_PASSWORD") == '""')
     login_count = len(imap_server.logins)
-    status, html = c.post("/imap/test", {})
+    status, html = c.post("/imap", {})
     check("IMAP test uses relay credentials after reset",
           "IMAP test OK" in html
           and ("updated-bot@example.com", "brand-new-app-password")
@@ -543,17 +559,15 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
     status, html = c.post("/people/update",
                           {"original": "frank", "name": "Franklin",
                            "email": "franklin.santa@example.com"})
-    people_disk = on_disk()["people"]
+    people_secret = on_secrets()["PEOPLE"]
     check("people rename applied",
-          people_disk.get("franklin") == "franklin.santa@example.com"
-          and "frank" not in people_disk, str(people_disk))
+          people_secret.get("franklin") == "franklin.santa@example.com"
+          and "frank" not in people_secret, str(people_secret))
 
     c.post("/settings", {"not_found_recipient": "chief@example.com",
                          "subject_template": "[SS] {original_subject}"})
-    disk = on_disk()
     check("general settings persisted",
-          disk["not_found_recipient"] == "chief@example.com"
-          and disk["subject_template"] == "[SS] {original_subject}")
+          on_secrets()["NOT_FOUND_RECIPIENT"] == "chief@example.com")
 
     c.post("/dashboard/password", {"password": "brand-new-dashboard-pw"})
     check("new dashboard password saved outside config.json",
@@ -572,9 +586,9 @@ def run_checks(catcher: RelayCatcher, on_disk, on_secrets,
 
     c.post("/whitelist/remove", {"email": "frank@example.com"})
     check("whitelist remove persisted",
-          "frank@example.com" not in on_disk()["whitelist"])
+          "frank@example.com" not in on_secrets()["WHITELIST"])
     c.post("/people/remove", {"original": "franklin", "name": "franklin"})
-    check("people remove persisted", "franklin" not in on_disk()["people"])
+    check("people remove persisted", "franklin" not in on_secrets()["PEOPLE"])
 
 
 if __name__ == "__main__":

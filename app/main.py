@@ -43,9 +43,18 @@ CONFIG_PATH = os.environ.get("CONFIG_PATH", "/app/config.json")
 SECRETS_PATH = os.environ.get(
     "SECRETS_PATH", os.path.join(os.path.dirname(CONFIG_PATH), ".env"))
 SECRET_FIELDS = {
-    "relay": ("password", "RELAY_PASSWORD"),
-    "imap": ("password", "IMAP_PASSWORD"),
-    "dashboard": ("password", "DASHBOARD_PASSWORD"),
+    "relay": [
+        ("password", "RELAY_PASSWORD"),
+        ("username", "RELAY_USERNAME"),
+        ("from_address", "RELAY_FROM_ADDRESS"),
+    ],
+    "imap": [
+        ("password", "IMAP_PASSWORD"),
+        ("username", "IMAP_USERNAME"),
+    ],
+    "dashboard": [
+        ("password", "DASHBOARD_PASSWORD"),
+    ],
 }
 
 
@@ -63,6 +72,7 @@ def _read_secrets() -> dict[str, str]:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip()
+        # Try to parse as JSON if it starts with [ or {
         if value.startswith('"'):
             try:
                 value = json.loads(value)
@@ -70,6 +80,11 @@ def _read_secrets() -> dict[str, str]:
                 value = value.strip('"')
         elif value.startswith("'") and value.endswith("'"):
             value = value[1:-1]
+        elif value.startswith(("[", "{")):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                pass  # keep as string if invalid JSON
         values[key] = value
     return values
 
@@ -92,7 +107,42 @@ def _write_config(data: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    os.replace(tmp, CONFIG_PATH)
+    try:
+        os.replace(tmp, CONFIG_PATH)
+    except OSError:
+        # A bind-mounted config.json (e.g. the Docker compose mount) cannot be
+        # replaced via rename because the mount point is busy. Fall back to
+        # writing the file in place so dashboard edits still persist.
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+
+
+SERVER_LOCATIONS = {
+    "com": {
+        "relay": {"host": "smtp.zoho.com", "port": 587, "starttls": True, "ssl": False,
+                      "username": "santa@example.com", "from_address": "Secret Santa <santa@example.com>"},
+        "imap": {"host": "imap.zoho.com", "port": 993, "ssl": True,
+                     "mailbox": "INBOX"},
+    },
+    "eu": {
+        "relay": {"host": "smtppro.zoho.eu", "port": 587, "starttls": True, "ssl": False,
+                  "username": "santa@example.com", "from_address": "Secret Santa <santa@example.com>"},
+        "imap": {"host": "imap.zoho.eu", "port": 993, "ssl": True,
+                     "mailbox": "INBOX"},
+    },
+    "uk": {
+        "relay": {"host": "smtppro.zoho.uk", "port": 465, "starttls": False, "ssl": True,
+                  "username": "santa@example.com", "from_address": "Secret Santa <santa@example.com>"},
+        "imap": {"host": "imappro.zoho.uk", "port": 993, "ssl": True,
+                     "mailbox": "INBOX"},
+    },
+}
 
 
 def load_config() -> dict:
@@ -102,28 +152,50 @@ def load_config() -> dict:
     file_secrets = _read_secrets()
     legacy_secrets = {}
     has_legacy_fields = False
-    for section, (field, key) in SECRET_FIELDS.items():
+    for section, fields in SECRET_FIELDS.items():
         section_cfg = cfg.setdefault(section, {})
-        has_legacy_fields = has_legacy_fields or field in section_cfg
-        # A saved blank value is an explicit removal, not an environment fallback.
-        if key in file_secrets:
-            value = file_secrets[key]
-        elif key in os.environ:
-            value = os.environ[key]
-        else:
-            value = section_cfg.get(field, "")
-            if value:
-                legacy_secrets[key] = value
-        section_cfg[field] = value
+        for field, key in fields:
+            has_legacy_fields = has_legacy_fields or field in section_cfg
+            # A saved blank value is an explicit removal, not an environment fallback.
+            if key in file_secrets:
+                value = file_secrets[key]
+            elif key in os.environ:
+                value = os.environ[key]
+            else:
+                value = section_cfg.get(field, "")
+                if value:
+                    legacy_secrets[key] = value
+            section_cfg[field] = value
 
     if legacy_secrets:
         _write_secrets(legacy_secrets)
     if has_legacy_fields:
         persisted_cfg = dict(cfg)
-        for section, (field, _) in SECRET_FIELDS.items():
+        for section, fields in SECRET_FIELDS.items():
             persisted_cfg[section] = dict(cfg[section])
-            persisted_cfg[section].pop(field, None)
+            for field, _ in fields:
+                persisted_cfg[section].pop(field, None)
         _write_config(persisted_cfg)
+
+    # ------------------------------------------------------------------
+    # Apply server-location defaults for relay & IMAP if not already set.
+    # ------------------------------------------------------------------
+    location = cfg.get("server_location", "uk").lower()
+    defaults = SERVER_LOCATIONS.get(location, SERVER_LOCATIONS["uk"])
+
+    # Ensure relay keys exist
+    if "relay" not in cfg:
+        cfg["relay"] = {}
+    for k, v in defaults["relay"].items():
+        if k not in cfg["relay"]:
+            cfg["relay"][k] = v
+
+    # Ensure imap keys exist
+    if "imap" not in cfg:
+        cfg["imap"] = {}
+    for k, v in defaults["imap"].items():
+        if k not in cfg["imap"]:
+            cfg["imap"][k] = v
 
     # Normalise whitelist emails to lowercase for case-insensitive matching
     cfg["whitelist"] = {addr.strip().lower() for addr in cfg.get("whitelist", [])}
@@ -131,20 +203,42 @@ def load_config() -> dict:
         name.strip().lower(): addr.strip()
         for name, addr in cfg.get("people", {}).items()
     }
+    # Handle whitelist, people, and not_found_recipient as secrets
+    whitelist = file_secrets.get("WHITELIST", [])
+    if whitelist:
+        cfg["whitelist"] = sorted(set(whitelist))
+    people = file_secrets.get("PEOPLE", {})
+    if isinstance(people, dict) and people:
+        cfg["people"] = {name: addr for name, addr in people.items()}
+    not_found = file_secrets.get("NOT_FOUND_RECIPIENT", "")
+    if not_found:
+        cfg["not_found_recipient"] = not_found
     return cfg
 
 
+# --------------------------------------------------------------------------
+# Recent routing events (surfaced on the web dashboard)
 def save_config() -> None:
     """Persist non-secret config and credentials separately in the ignored .env."""
     secret_values = {}
     data = dict(CFG)
-    for section, (field, key) in SECRET_FIELDS.items():
+    for section, fields in SECRET_FIELDS.items():
         section_data = dict(CFG.get(section, {}))
-        secret_values[key] = section_data.pop(field, "") or ""
+        for field, key in fields:
+            secret_values[key] = section_data.pop(field, "") or ""
         data[section] = section_data
+    
+    # Also persist whitelist, people, and not_found_recipient as secrets
+    secret_values["WHITELIST"] = sorted(CFG.get("whitelist", []))
+    secret_values["PEOPLE"] = CFG.get("people", {})
+    secret_values["NOT_FOUND_RECIPIENT"] = CFG.get("not_found_recipient", "")
+    
+    # Strip from config data
+    data.pop("whitelist", None)
+    data.pop("people", None)
+    data.pop("not_found_recipient", None)
+    
     _write_secrets(secret_values)
-
-    data["whitelist"] = sorted(CFG["whitelist"])
     _write_config(data)
 
 
@@ -208,6 +302,7 @@ def _html_to_text(src: str) -> str:
         p.feed(src)
         p.close()
     except Exception:
+        log.exception("HTML text extraction failed, returning raw source")
         return src
     return re.sub(r"\n{3,}", "\n\n", "".join(p.buf)).strip()
 
@@ -313,7 +408,7 @@ def send_acknowledgement(sender: str, success: bool, person: str | None = None,
 def _effective_whitelist() -> set:
     """Compute the effective whitelist: explicit whitelist entries plus all people's emails (lowercased, stripped)."""
     explicit = set(CFG["whitelist"])
-    for name, email in CFG["people"].items():
+    for email in CFG["people"].values():
         explicit.add(email.strip().lower())
     return explicit
 
@@ -402,7 +497,7 @@ def _is_own_message(original: EmailMessage, sender: str) -> bool:
 
 def _poll_imap_once(imap_cfg: dict) -> None:
     relay = CFG.get("relay") or {}
-    host = imap_cfg.get("host") or "imap.zoho.com"
+    host = imap_cfg.get("host") or ""
     port = int(imap_cfg.get("port") or 993)
     username = imap_cfg.get("username") or relay.get("username", "")
     password = imap_cfg.get("password") or relay.get("password", "")
@@ -421,7 +516,7 @@ def _poll_imap_once(imap_cfg: dict) -> None:
         if typ != "OK":
             log.warning("IMAP SELECT %s failed: %s", mailbox, typ)
             return
-        typ, data = conn.uid("search", None, "UNSEEN")
+        typ, data = conn.uid("search", "UNSEEN")
         if typ != "OK":
             log.warning("IMAP SEARCH failed: %s", typ)
             return
@@ -455,7 +550,7 @@ def _poll_imap_once(imap_cfg: dict) -> None:
         try:
             conn.logout()
         except Exception:
-            pass
+            log.exception("IMAP logout failed")
 
 
 def _imap_worker() -> None:

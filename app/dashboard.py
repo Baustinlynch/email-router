@@ -92,6 +92,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
     def index():
         relay = cfg.get("relay", {})
         imap = cfg.get("imap", {})
+        server_location = cfg.get("server_location", "uk").lower()
         return render_template(
             "index.html",
             whitelist=sorted(cfg.get("whitelist", set())),
@@ -105,6 +106,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
             imap_has_password=bool(imap.get("password")),
             not_found_recipient=cfg.get("not_found_recipient", ""),
             subject_template=cfg.get("subject_template", ""),
+            server_location=server_location,
             listen_host=cfg.get("listen_host", "?"),
             listen_port=cfg.get("listen_port", "?"),
             events=events(),
@@ -235,6 +237,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
         except KeyError:
             flash("No relay host configured.", "error")
         except Exception as exc:
+            log.exception("Relay test failed: %s")
             flash(f"Relay test failed: {exc}", "error")
         return redirect(url_for("index"))
 
@@ -305,11 +308,12 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
                 try:
                     conn.logout()
                 except Exception:
-                    pass
+                    log.exception("IMAP logout failed")
             flash(f"IMAP test OK — logged in and opened {mailbox} ({host}:{port}).")
         except KeyError:
             flash("No IMAP host configured.", "error")
         except Exception as exc:
+            log.exception("IMAP test failed: %s")
             flash(f"IMAP test failed: {exc}", "error")
         return redirect(url_for("index"))
 
@@ -318,6 +322,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
     def settings_save():
         not_found = request.form.get("not_found_recipient", "").strip()
         template = request.form.get("subject_template", "").strip()
+        server_location = request.form.get("server_location", "uk").strip().lower()
         if not_found and not valid_email(not_found):
             flash("The fallback address doesn't look like an email.", "error")
         elif "{original_subject}" not in template:
@@ -325,6 +330,7 @@ def create_app(cfg: dict, save_config, events, normalise) -> Flask:
         else:
             cfg["not_found_recipient"] = not_found
             cfg["subject_template"] = template
+            cfg["server_location"] = server_location
             if save():
                 flash("General settings saved.")
         return redirect(url_for("index"))

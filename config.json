@@ -1,46 +1,42 @@
 {
   "listen_host": "0.0.0.0",
   "listen_port": 1025,
-
+  "server_location": "uk",
   "relay": {
-    "host": "smtp.zoho.com",
-    "port": 587,
-    "starttls": true,
-    "ssl": false,
-    "username": "santa@brenden.zip",
-    "from_address": "Secret Santa <santa@brenden.zip>"
+    "host": "smtppro.zoho.uk",
+    "port": 465,
+    "starttls": false,
+    "ssl": true,
+    "username": "santa.claus@example.com",
+    "from_address": "santa.claus@example.com"
   },
-
   "imap": {
     "enabled": true,
-    "host": "imap.zoho.com",
+    "host": "imappro.zoho.uk",
     "port": 993,
     "ssl": true,
-    "username": "santa@brenden.zip",
+    "username": "santa.claus@example.com",
     "mailbox": "INBOX",
     "poll_seconds": 30,
     "mark_seen": true
   },
-
   "dashboard": {
     "host": "0.0.0.0",
     "port": 8080
   },
-
-  "whitelist": [
-    "alice@example.com",
-    "bob@example.com",
-    "carol@example.com",
-    "dave@example.com"
-  ],
-
+  "whitelist": [],
   "people": {
-    "alice": "alice.santa@example.com",
-    "bob": "bob.santa@example.com",
-    "carol": "carol.santa@example.com",
-    "dave": "dave.santa@example.com"
+    "indigo": "indigo@example.com",
+    "quinn": "quinn@example.com",
+    "charlotte": "charlotte@example.com",
+    "emily": "emily@example.com",
+    "eve": "eve@example.com",
+    "lucy": "lucy@example.com",
+    "molly": "molly@example.com",
+    "zilan": "zilan@example.com",
+    "zoe": "zoe@example.com",
+    "brenden": "brenden@example.com"
   },
-
-  "not_found_recipient": "organizer@example.com",
+  "not_found_recipient": "",
   "subject_template": "[Secret Santa] {original_subject}"
 }

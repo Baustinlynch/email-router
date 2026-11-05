@@ -99,9 +99,9 @@
   <div class="card">
     <h2>Relay (SMTP) settings</h2>
     <p class="hint">The real SMTP account that delivers forwarded mail. For Zoho Mail:
-      host <span class="mono">smtp.zoho.com</span>, port <span class="mono">587</span>,
-      STARTTLS on (or port <span class="mono">465</span> with SSL on), username =
-      <span class="mono">santa@brenden.zip</span>, password = your Zoho password or an
+      host <span class="mono">smtppro.zoho.uk</span>, port <span class="mono">465</span>,
+      SSL on (implicit TLS; STARTTLS off), username =
+      <span class="mono">santa@example.com</span>, password = your Zoho password or an
       <b>app-specific password</b> (Zoho account → Security → App Passwords).
       Password changes are saved privately in <span class="mono">.env</span>,
       never shown or sent back to the browser.</p>
@@ -110,13 +110,13 @@
       <label>SMTP host
         <input type="text" name="host" value="{{ relay.get('host', '') }}" required></label>
       <label>Port
-        <input type="number" name="port" value="{{ relay.get('port', 587) }}" style="max-width:140px" required></label>
+        <input type="number" name="port" value="{{ relay.get('port', 465) }}" style="max-width:140px" required></label>
       <label class="check">
         <input type="checkbox" name="starttls" {% if relay.get('starttls', true) %}checked{% endif %}>
-        Use STARTTLS and log in (Zoho: yes, port 587)</label>
+        Use STARTTLS and log in (Zoho UK: no, port 465 uses SSL)</label>
       <label class="check">
         <input type="checkbox" name="ssl" {% if relay.get('ssl') %}checked{% endif %}>
-        Use implicit SSL instead (Zoho: port 465; leave STARTTLS off)</label>
+        Use implicit SSL instead (Zoho UK: yes, port 465; leave STARTTLS off)</label>
       <label>SMTP username / email address
         <input type="text" name="username" value="{{ relay.get('username', '') }}"
                autocomplete="username"></label>
@@ -135,13 +135,13 @@
       <button class="ghost" type="submit">Test saved relay settings</button>
     </form>
     <p class="hint" style="margin:8px 0 0">Tests the <b>saved</b> settings, so save first:
-      connects, starts TLS and logs in — no mail is sent.</p>
+      connects and logs in over SSL — no mail is sent.</p>
   </div>
 
   <div class="card">
     <h2>Incoming mail (IMAP)</h2>
     <p class="hint">Poll a real mailbox for new mail and route it exactly like SMTP mail.
-      For Zoho Mail: host <span class="mono">imap.zoho.com</span>, port
+      For Zoho Mail: host <span class="mono">imappro.zoho.uk</span>, port
       <span class="mono">993</span>, SSL on, mailbox <span class="mono">INBOX</span>.
       Set a separate mailbox account below, or use the relay credentials.
       Passwords are saved privately in <span class="mono">.env</span> and are never
@@ -153,7 +153,7 @@
         <input type="checkbox" name="enabled" {% if imap.get('enabled') %}checked{% endif %}>
         Poll this mailbox for incoming mail</label>
       <label>IMAP host
-        <input type="text" name="host" value="{{ imap.get('host', 'imap.zoho.com') }}" required></label>
+        <input type="text" name="host" value="{{ imap.get('host', 'imappro.zoho.uk') }}" required></label>
       <label>Port
         <input type="number" name="port" value="{{ imap.get('port', 993) }}" style="max-width:140px" required></label>
       <label class="check">
@@ -193,6 +193,13 @@
         <input type="text" name="not_found_recipient" value="{{ not_found_recipient }}"></label>
       <label>Subject template for forwarded mail
         <input type="text" name="subject_template" value="{{ subject_template }}"></label>
+      <label>Server location
+        <select name="server_location">
+          <option value="com" {% if server_location == 'com' %}selected{% endif %}>Zoho .com (Global)</option>
+          <option value="eu" {% if server_location == 'eu' %}selected{% endif %}>Zoho .eu (Europe)</option>
+          <option value="uk" {% if server_location == 'uk' %}selected{% endif %}>Zoho .uk (United Kingdom)</option>
+          <option value="custom" {% if server_location == 'custom' %}selected{% endif %}>Custom (enter host/port manually)</option>
+        </select></label>
       <div class="row"><button type="submit">Save general settings</button></div>
     </form>
   </div>

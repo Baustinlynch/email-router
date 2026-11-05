@@ -101,28 +101,36 @@ The app then listens on `0.0.0.0:1025` (SMTP) and serves the dashboard at
 If `DASHBOARD_PASSWORD` is blank or missing, the app generates a dashboard
 password on first start and stores it in `.env`. Read it from that private file.
 
-## Using Zoho Mail (santa@brenden.zip)
+## Using Zoho Mail (santa@example.com)
 
 The shipped `config.json` is already pointed at Zoho; you only need to supply
-the password and enable IMAP in Zoho:
+the password and enable IMAP in Zoho. If you want to switch data centres,
+set the `server_location` key in `config.json` (or via the dashboard) to one
+of "com", "eu", or "uk". The router then fills defaults for relay and IMAP.
 
 1. In Zoho Mail: **Settings → Mail Accounts → IMAP → Enable IMAP access**.
 2. If the account has two-factor authentication, create an **app-specific
    password** (Zoho account → Security → App Passwords) and use it as the
    password below; otherwise the normal account password works.
 3. On the dashboard, enter the Zoho app password in **Relay (SMTP) settings**
-   (saved privately to `.env`). Set the relay host to `smtp.zoho.com`, port `587`,
-   STARTTLS on (or port `465` with SSL on), and username `santa@brenden.zip`.
+   (saved privately to `.env`). Edit the **General settings** to set
+   `server_location` (or simply edit the config.json host/port fields if you
+   prefer). For Zoho UK (default), the host/port/SSL/STARTTLS/username are
+   already correct. If you change location, the router will recompute defaults.
 4. In **Incoming mail (IMAP)**, enter a separate username/password or select
    *Clear IMAP username/password overrides and use relay credentials instead*.
-   Use host `imap.zoho.com`, port `993`, SSL on, mailbox `INBOX`, and enable
-   polling. Use the *Test saved IMAP settings* button to verify.
+   The host/port/SSL/username default to the `server_location` setting, but
+   these can be overridden. Enable polling and use the *Test saved IMAP
+   settings* button to verify.
 5. Add the real participants' addresses to `people` — they are automatically whitelisted to send as well. Add any additional senders to `whitelist`.
 
 Notes:
 
 - Zoho's free plan includes IMAP/POP/SMTP access; if the IMAP test fails with
   an auth error, re-check step 1 and 2.
+- The relay and IMAP hostnames must match your Zoho account's data centre
+  (`.com`, `.eu`, `.uk`, etc.) — login fails even with the right password if
+  they don't.
 - With IMAP polling you do **not** point MX at this host — Zoho receives the
   mail and the app fetches it. Leave the SMTP listener free for local tests.
 - The poller skips messages the app sent itself (its own From address or the
@@ -176,8 +184,9 @@ rotated; deleting it from the current file does not remove it from Git history.
 | `listen_host` / `listen_port` | Where the app accepts incoming SMTP. |
 | `relay` | Real SMTP server used to deliver the forwarded mail. |
 | `relay.from_address` | The `From:` shown on forwarded mail (the anonymous identity). |
+| `server_location` | One of "com", "eu", or "uk". Sets default relay/IMAP hosts, ports, SSL/STARTTLS, and usernames for the chosen Zoho data centre. |
 | `imap.enabled` | Poll a mailbox for incoming mail instead of (or in addition to) the SMTP listener. |
-| `imap.host` / `imap.port` / `imap.ssl` | IMAP server to poll (Zoho: `imap.zoho.com`, `993`, SSL). |
+| `imap.host` / `imap.port` / `imap.ssl` | IMAP server to poll (Zoho UK: `imappro.zoho.uk`, `993`, SSL). |
 | `imap.username` | IMAP login name; the password is `IMAP_PASSWORD` in `.env`, falling back to the relay password when blank. |
 | `imap.mailbox` | Mailbox to poll (default `INBOX`). |
 | `imap.poll_seconds` | Seconds between polls (minimum 5 via the dashboard). |

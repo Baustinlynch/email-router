@@ -38,10 +38,9 @@ Outbound mail always goes through the configured SMTP relay.
    Put SMTP, IMAP, and dashboard passwords in `.env` (see the Zoho section
    below). Keep `.env` private; it is ignored by Git and excluded from the image.
    `config.json` contains only non-secret settings.
-   - Add any additional allowed senders to `whitelist`.
-   - Map each **name to be typed in the subject** to that person's **email** under `people`. People are automatically whitelisted to send as well.
-     under `people`.
-   - Set `not_found_recipient` to the organiser's email (optional safety net).
+   - Add any additional allowed senders to `WHITELIST` in `.env`.
+   - Map each **name to be typed in the subject** to that person's **email** under `PEOPLE` in `.env`. People are automatically whitelisted to send as well.
+   - Set `NOT_FOUND_RECIPIENT` to the organiser's email (optional safety net) in `.env`.
 2. Start it:
 
    ```bash

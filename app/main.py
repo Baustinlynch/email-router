@@ -8,6 +8,9 @@ email to that person's address.
 Configuration lives in config.json (mounted into the container at /app/config.json)
 and can be edited from the bundled web dashboard (dashboard.py, default :8080),
 which mutates the live config in place — routing changes need no restart.
+
+Email-related settings (whitelist, people, not_found_recipient) are stored in
+.env (a non-git-tracked file) as secrets, not in config.json.
 """
 
 import asyncio
@@ -55,6 +58,13 @@ SECRET_FIELDS = {
     "dashboard": [
         ("password", "DASHBOARD_PASSWORD"),
     ],
+}
+
+# Email-related settings stored in .env (non-git-tracked) rather than config.json.
+EMAIL_SECRET_FIELDS = {
+    "whitelist": "WHITELIST",
+    "people": "PEOPLE",
+    "not_found_recipient": "NOT_FOUND_RECIPIENT",
 }
 
 
@@ -167,6 +177,37 @@ def load_config() -> dict:
                     legacy_secrets[key] = value
             section_cfg[field] = value
 
+    # Email-related settings live in .env as secrets (not config.json).
+    # Migrate any legacy config.json values into .env on startup.
+    for field, key in EMAIL_SECRET_FIELDS.items():
+        has_legacy_fields = has_legacy_fields or field in cfg
+        if key in file_secrets:
+            value = file_secrets[key]
+        elif key in os.environ:
+            value = os.environ[key]
+        else:
+            value = cfg.get(field, "")
+            if value:
+                legacy_secrets[key] = value
+        if field == "whitelist":
+            # value may be a list (from JSON) or a string (from env/legacy)
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except json.JSONDecodeError:
+                    value = []
+            cfg["whitelist"] = sorted(set(value)) if value else []
+        elif field == "people":
+            # value may be a dict (from JSON) or a string (from env/legacy)
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except json.JSONDecodeError:
+                    value = {}
+            cfg["people"] = {name: addr for name, addr in (value or {}).items()}
+        elif field == "not_found_recipient":
+            cfg["not_found_recipient"] = value or ""
+
     if legacy_secrets:
         _write_secrets(legacy_secrets)
     if has_legacy_fields:
@@ -175,6 +216,10 @@ def load_config() -> dict:
             persisted_cfg[section] = dict(cfg[section])
             for field, _ in fields:
                 persisted_cfg[section].pop(field, None)
+        _write_config(persisted_cfg)
+        # Remove migrated email fields from config.json
+        for field in EMAIL_SECRET_FIELDS:
+            persisted_cfg.pop(field, None)
         _write_config(persisted_cfg)
 
     # ------------------------------------------------------------------
@@ -203,16 +248,6 @@ def load_config() -> dict:
         name.strip().lower(): addr.strip()
         for name, addr in cfg.get("people", {}).items()
     }
-    # Handle whitelist, people, and not_found_recipient as secrets
-    whitelist = file_secrets.get("WHITELIST", [])
-    if whitelist:
-        cfg["whitelist"] = sorted(set(whitelist))
-    people = file_secrets.get("PEOPLE", {})
-    if isinstance(people, dict) and people:
-        cfg["people"] = {name: addr for name, addr in people.items()}
-    not_found = file_secrets.get("NOT_FOUND_RECIPIENT", "")
-    if not_found:
-        cfg["not_found_recipient"] = not_found
     return cfg
 
 
@@ -227,18 +262,18 @@ def save_config() -> None:
         for field, key in fields:
             secret_values[key] = section_data.pop(field, "") or ""
         data[section] = section_data
-    
-    # Also persist whitelist, people, and not_found_recipient as secrets
+
+    # Email-related settings are stored in .env only (not config.json).
+    # Do NOT persist whitelist/people/not_found_recipient to config.json.
     secret_values["WHITELIST"] = sorted(CFG.get("whitelist", []))
     secret_values["PEOPLE"] = CFG.get("people", {})
     secret_values["NOT_FOUND_RECIPIENT"] = CFG.get("not_found_recipient", "")
-    
-    # Strip from config data
+
+    _write_secrets(secret_values)
+    # Strip email fields from config data so they are not written to config.json
     data.pop("whitelist", None)
     data.pop("people", None)
     data.pop("not_found_recipient", None)
-    
-    _write_secrets(secret_values)
     _write_config(data)
 
 

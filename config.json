@@ -6,16 +6,13 @@
     "host": "smtppro.zoho.uk",
     "port": 465,
     "starttls": false,
-    "ssl": true,
-    "username": "santa.claus@example.com",
-    "from_address": "santa.claus@example.com"
+    "ssl": true
   },
   "imap": {
     "enabled": true,
     "host": "imappro.zoho.uk",
     "port": 993,
     "ssl": true,
-    "username": "santa.claus@example.com",
     "mailbox": "INBOX",
     "poll_seconds": 30,
     "mark_seen": true
@@ -24,9 +21,5 @@
     "host": "0.0.0.0",
     "port": 8080
   },
-  "subject_template": "[Secret Santa] {original_subject}",
-  "whitelist": [],
-  "people": {
-    "brenden": "160688300@ea.edin.sch.uk"
-  }
+  "subject_template": "[Secret Santa] {original_subject}"
 }
